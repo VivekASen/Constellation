@@ -148,6 +148,10 @@ struct ConstellationGraphView: View {
                 }
             }
             .frame(height: 390)
+            .animation(.spring(response: 0.46, dampingFraction: 0.84), value: selectedThemeFilter)
+            .animation(.spring(response: 0.46, dampingFraction: 0.84), value: selectedCollectionFilter)
+            .animation(.spring(response: 0.46, dampingFraction: 0.84), value: filter)
+            .animation(.spring(response: 0.46, dampingFraction: 0.84), value: densityMode)
             
             if let selected = graph.nodes.first(where: { $0.id == selectedNodeID }) {
                 selectedNodePanel(selected)
@@ -306,25 +310,21 @@ struct ConstellationGraphView: View {
         }
         
         var nodes: [GraphNode] = []
-        var positions: [String: CGPoint] = [:]
         var edgeMeta: [String: EdgeAggregate] = [:]
         
-        for (index, movie) in selectedMovies.enumerated() {
+        for movie in selectedMovies {
             let node = GraphNode(id: "movie::\(movie.id.uuidString)", title: movie.title, kind: .movie, reference: movie.id.uuidString)
             nodes.append(node)
-            positions[node.id] = ringPosition(index: index, total: max(selectedMovies.count, 1), radius: 0.86, phase: 0.0)
         }
         
-        for (index, show) in selectedShows.enumerated() {
+        for show in selectedShows {
             let node = GraphNode(id: "show::\(show.id.uuidString)", title: show.title, kind: .tvShow, reference: show.id.uuidString)
             nodes.append(node)
-            positions[node.id] = ringPosition(index: index, total: max(selectedShows.count, 1), radius: 0.66, phase: .pi / 8)
         }
         
-        for (index, theme) in topThemes.enumerated() {
+        for theme in topThemes {
             let node = GraphNode(id: "theme::\(theme)", title: theme, kind: .theme, reference: theme)
             nodes.append(node)
-            positions[node.id] = ringPosition(index: index, total: max(topThemes.count, 1), radius: 0.42, phase: .pi / 12)
         }
         
         let topThemeSet = Set(topThemes)
@@ -378,7 +378,15 @@ struct ConstellationGraphView: View {
             }
             .prefix(130)
         
-        return GraphData(nodes: nodes, edges: Array(prioritizedEdges), positions: positions)
+        let finalEdges = Array(prioritizedEdges)
+        let positions = computeDynamicPositions(
+            nodes: nodes,
+            edges: finalEdges,
+            themeFilter: themeFilter,
+            collectionFilter: collectionFilter
+        )
+        
+        return GraphData(nodes: nodes, edges: finalEdges, positions: positions)
     }
     
     private func graphGesture(maxZoom: CGFloat) -> some Gesture {
@@ -415,6 +423,136 @@ struct ConstellationGraphView: View {
         current.weight += 1
         current.source = current.source.merged(with: source)
         storage[key] = current
+    }
+    
+    private func computeDynamicPositions(
+        nodes: [GraphNode],
+        edges: [GraphEdge],
+        themeFilter: String?,
+        collectionFilter: String?
+    ) -> [String: CGPoint] {
+        var positions: [String: CGPoint] = [:]
+        
+        let themes = nodes.filter { $0.kind == .theme }.sorted { $0.id < $1.id }
+        let media = nodes.filter { $0.kind != .theme }.sorted { $0.id < $1.id }
+        let adjacency = buildAdjacency(edges: edges)
+        
+        // Focused mode: one chosen theme in center, connected media around it.
+        if let themeFilter {
+            let focusedThemeID = "theme::\(themeFilter)"
+            if themes.contains(where: { $0.id == focusedThemeID }) {
+                positions[focusedThemeID] = .zero
+                
+                let connectedMedia = media.filter { adjacency[$0.id, default: []].contains(focusedThemeID) }
+                for (index, item) in connectedMedia.enumerated() {
+                    positions[item.id] = ringPosition(index: index, total: max(connectedMedia.count, 1), radius: 0.56, phase: deterministicPhase(for: item.id))
+                }
+                
+                let nonConnected = media.filter { positions[$0.id] == nil }
+                for (index, item) in nonConnected.enumerated() {
+                    positions[item.id] = ringPosition(index: index, total: max(nonConnected.count, 1), radius: 0.88, phase: .pi / 7)
+                }
+                
+                return positions
+            }
+        }
+        
+        // Collection-focused mode: keep theme core, but tighten members.
+        if collectionFilter != nil {
+            for (index, theme) in themes.enumerated() {
+                positions[theme.id] = ringPosition(index: index, total: max(themes.count, 1), radius: 0.36, phase: .pi / 11)
+            }
+            
+            let themedMedia = media.filter { !adjacency[$0.id, default: []].isDisjoint(with: Set(themes.map(\.id))) }
+            let themedIDs = Set(themedMedia.map(\.id))
+            let plainMedia = media.filter { !themedIDs.contains($0.id) }
+            
+            for (index, item) in themedMedia.enumerated() {
+                let anchor = nearestThemeID(for: item.id, themes: themes, adjacency: adjacency) ?? themes.first?.id
+                let center = anchor.flatMap { positions[$0] } ?? .zero
+                let local = ringPosition(index: index, total: max(themedMedia.count, 1), radius: 0.2, phase: deterministicPhase(for: item.id))
+                positions[item.id] = CGPoint(x: center.x + local.x, y: center.y + local.y)
+            }
+            
+            for (index, item) in plainMedia.enumerated() {
+                positions[item.id] = ringPosition(index: index, total: max(plainMedia.count, 1), radius: 0.92, phase: .pi / 5)
+            }
+            
+            return positions
+        }
+        
+        // General mode: themes in core, media clustered around their strongest theme.
+        for (index, theme) in themes.enumerated() {
+            positions[theme.id] = ringPosition(index: index, total: max(themes.count, 1), radius: 0.37, phase: .pi / 12)
+        }
+        
+        if themes.isEmpty {
+            let movies = media.filter { $0.kind == .movie }
+            let shows = media.filter { $0.kind == .tvShow }
+            for (index, item) in movies.enumerated() {
+                positions[item.id] = ringPosition(index: index, total: max(movies.count, 1), radius: 0.74, phase: 0)
+            }
+            for (index, item) in shows.enumerated() {
+                positions[item.id] = ringPosition(index: index, total: max(shows.count, 1), radius: 0.9, phase: .pi / 8)
+            }
+            return positions
+        }
+        
+        var byAnchor: [String: [GraphNode]] = [:]
+        for item in media {
+            let anchor = nearestThemeID(for: item.id, themes: themes, adjacency: adjacency) ?? "unassigned"
+            byAnchor[anchor, default: []].append(item)
+        }
+        
+        let anchors = byAnchor.keys.sorted()
+        for anchor in anchors {
+            guard let items = byAnchor[anchor] else { continue }
+            let clusterCenter: CGPoint
+            
+            if anchor == "unassigned" {
+                clusterCenter = CGPoint(x: 0, y: 0)
+            } else {
+                let themeCenter = positions[anchor] ?? .zero
+                clusterCenter = CGPoint(x: themeCenter.x * 1.28, y: themeCenter.y * 1.28)
+            }
+            
+            for (index, item) in items.enumerated() {
+                let local = ringPosition(
+                    index: index,
+                    total: max(items.count, 1),
+                    radius: items.count <= 3 ? 0.14 : 0.2,
+                    phase: deterministicPhase(for: item.id)
+                )
+                positions[item.id] = CGPoint(x: clusterCenter.x + local.x, y: clusterCenter.y + local.y)
+            }
+        }
+        
+        return positions
+    }
+    
+    private func buildAdjacency(edges: [GraphEdge]) -> [String: Set<String>] {
+        var adjacency: [String: Set<String>] = [:]
+        for edge in edges {
+            adjacency[edge.fromID, default: []].insert(edge.toID)
+            adjacency[edge.toID, default: []].insert(edge.fromID)
+        }
+        return adjacency
+    }
+    
+    private func nearestThemeID(for mediaID: String, themes: [GraphNode], adjacency: [String: Set<String>]) -> String? {
+        let neighborThemes = adjacency[mediaID, default: []]
+            .filter { $0.hasPrefix("theme::") }
+            .sorted()
+        if let direct = neighborThemes.first {
+            return direct
+        }
+        return themes.first?.id
+    }
+    
+    private func deterministicPhase(for id: String) -> CGFloat {
+        let sum = id.unicodeScalars.reduce(0) { $0 + Int($1.value) }
+        let fraction = CGFloat(sum % 628) / 100.0
+        return fraction
     }
 }
 
