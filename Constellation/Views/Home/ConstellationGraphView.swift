@@ -54,6 +54,17 @@ struct ConstellationGraphView: View {
                 
                 Spacer()
                 
+                Button {
+                    resetViewport()
+                } label: {
+                    Label("Reset", systemImage: "scope")
+                        .font(.caption)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.gray.opacity(0.14))
+                        .clipShape(Capsule())
+                }
+                
                 BrainPortalButton {
                     showImmersiveMode = true
                 }
@@ -411,6 +422,15 @@ struct ConstellationGraphView: View {
         )
     }
     
+    private func resetViewport() {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+            zoom = 1.0
+            pan = .zero
+            zoomStart = 1.0
+            panStart = .zero
+        }
+    }
+    
     private func ringPosition(index: Int, total: Int, radius: CGFloat, phase: CGFloat) -> CGPoint {
         guard total > 0 else { return .zero }
         let angle = (CGFloat(index) / CGFloat(total)) * (.pi * 2) + phase
@@ -656,6 +676,18 @@ private struct ImmersiveConstellationView: View {
                     } else {
                         Color.clear.frame(width: 52, height: 1)
                     }
+                    
+                    Button {
+                        resetViewport()
+                    } label: {
+                        Label("Reset", systemImage: "scope")
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.white.opacity(0.12))
+                            .clipShape(Capsule())
+                            .foregroundStyle(.white)
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
@@ -706,6 +738,15 @@ private struct ImmersiveConstellationView: View {
                     zoomStart = zoom
                 }
         )
+    }
+    
+    private func resetViewport() {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+            zoom = 1.0
+            pan = .zero
+            zoomStart = 1.0
+            panStart = .zero
+        }
     }
 }
 
