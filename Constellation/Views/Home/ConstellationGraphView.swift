@@ -16,6 +16,7 @@ struct ConstellationGraphView: View {
     @State private var pan: CGSize = .zero
     @State private var selectedNodeID: String?
     @State private var filter: GraphFilter = .all
+    @State private var showImmersiveMode = false
     
     @State private var selectedMovie: Movie?
     @State private var selectedTVShow: TVShow?
@@ -29,24 +30,33 @@ struct ConstellationGraphView: View {
         let visibleEdges = graph.edges.filter { visibleNodeIDs.contains($0.fromID) && visibleNodeIDs.contains($0.toID) }
         
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Constellation Graph")
-                    .font(.headline)
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Constellation Graph")
+                        .font(.headline)
+                    Text("Tap the brain to dive into immersive mode")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 
                 Spacer()
                 
-                HStack(spacing: 8) {
-                    ForEach(GraphFilter.allCases, id: \.self) { option in
-                        Button(option.title) {
-                            filter = option
-                        }
-                        .font(.caption)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(filter == option ? Color.blue.opacity(0.2) : Color.gray.opacity(0.14))
-                        .foregroundStyle(filter == option ? .blue : .secondary)
-                        .clipShape(Capsule())
+                BrainPortalButton {
+                    showImmersiveMode = true
+                }
+            }
+            
+            HStack(spacing: 8) {
+                ForEach(GraphFilter.allCases, id: \.self) { option in
+                    Button(option.title) {
+                        filter = option
                     }
+                    .font(.caption)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(filter == option ? Color.blue.opacity(0.2) : Color.gray.opacity(0.14))
+                    .foregroundStyle(filter == option ? .blue : .secondary)
+                    .clipShape(Capsule())
                 }
             }
             
@@ -59,7 +69,8 @@ struct ConstellationGraphView: View {
                         size: proxy.size,
                         nodes: visibleNodes,
                         edges: visibleEdges,
-                        positions: graph.positions
+                        positions: graph.positions,
+                        animated: false
                     )
                     .scaleEffect(zoom)
                     .offset(pan)
@@ -92,19 +103,26 @@ struct ConstellationGraphView: View {
             }
         }
         .sheet(item: $selectedMovie) { movie in
-            NavigationStack {
-                MovieDetailView(movie: movie)
-            }
+            NavigationStack { MovieDetailView(movie: movie) }
         }
         .sheet(item: $selectedTVShow) { show in
-            NavigationStack {
-                TVShowDetailView(show: show)
-            }
+            NavigationStack { TVShowDetailView(show: show) }
         }
         .sheet(item: $selectedTheme) { theme in
-            NavigationStack {
-                ThemeDetailView(themeName: theme.id)
-            }
+            NavigationStack { ThemeDetailView(themeName: theme.id) }
+        }
+        .fullScreenCover(isPresented: $showImmersiveMode) {
+            ImmersiveConstellationView(
+                graph: graph,
+                filter: filter,
+                onClose: { showImmersiveMode = false },
+                onOpenNode: { node in
+                    showImmersiveMode = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        openNode(node)
+                    }
+                }
+            )
         }
     }
     
@@ -113,27 +131,25 @@ struct ConstellationGraphView: View {
         size: CGSize,
         nodes: [GraphNode],
         edges: [GraphEdge],
-        positions: [String: CGPoint]
+        positions: [String: CGPoint],
+        animated: Bool
     ) -> some View {
-        ZStack {
-            ForEach(edges) { edge in
-                if let from = positions[edge.fromID], let to = positions[edge.toID] {
-                    Path { path in
-                        path.move(to: point(for: from, in: size))
-                        path.addLine(to: point(for: to, in: size))
-                    }
-                    .stroke(Color.gray.opacity(edge.weight > 1 ? 0.4 : 0.24), lineWidth: edge.weight > 1 ? 1.6 : 1.0)
+        let edgeView = GraphEdgesLayer(edges: edges, size: size, positions: positions, animated: animated)
+        let nodeView = GraphNodesLayer(nodes: nodes, size: size, positions: positions, selectedNodeID: $selectedNodeID)
+        
+        if animated {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                ZStack {
+                    edgeView
+                        .environment(\.graphAnimationTime, timeline.date.timeIntervalSinceReferenceDate)
+                    nodeView
                 }
             }
-            
-            ForEach(nodes) { node in
-                if let position = positions[node.id] {
-                    GraphNodeBubble(node: node, isSelected: selectedNodeID == node.id)
-                        .position(point(for: position, in: size))
-                        .onTapGesture {
-                            selectedNodeID = node.id
-                        }
-                }
+        } else {
+            ZStack {
+                edgeView
+                    .environment(\.graphAnimationTime, 0)
+                nodeView
             }
         }
     }
@@ -183,105 +199,95 @@ struct ConstellationGraphView: View {
         }
     }
     
-    private func point(for normalized: CGPoint, in size: CGSize) -> CGPoint {
-        let minSide = min(size.width, size.height)
-        return CGPoint(
-            x: size.width / 2 + normalized.x * minSide * 0.44,
-            y: size.height / 2 + normalized.y * minSide * 0.44
-        )
-    }
-    
     private func buildGraph() -> GraphData {
-        let trimmedMovies = Array(movies.prefix(14))
-        let trimmedShows = Array(tvShows.prefix(14))
+        let recentMovieIDs = Set(movies.prefix(14).map { $0.id.uuidString })
+        let recentShowIDs = Set(tvShows.prefix(14).map { $0.id.uuidString })
+        let collectionMovieIDs = Set(collections.flatMap(\.movieIDs))
+        let collectionShowIDs = Set(collections.flatMap(\.showIDs))
         
-        let themeCounts = Dictionary(grouping: (trimmedMovies.flatMap(\.themes) + trimmedShows.flatMap(\.themes)), by: { $0 })
+        let selectedMovies = Array(
+            movies.filter { recentMovieIDs.contains($0.id.uuidString) || collectionMovieIDs.contains($0.id.uuidString) }
+                .prefix(24)
+        )
+        let selectedShows = Array(
+            tvShows.filter { recentShowIDs.contains($0.id.uuidString) || collectionShowIDs.contains($0.id.uuidString) }
+                .prefix(24)
+        )
+        
+        let themeCounts = Dictionary(grouping: (selectedMovies.flatMap(\.themes) + selectedShows.flatMap(\.themes)), by: { $0 })
             .mapValues(\.count)
         
         let topThemes = themeCounts
             .sorted { lhs, rhs in
-                if lhs.value == rhs.value {
-                    return lhs.key < rhs.key
-                }
+                if lhs.value == rhs.value { return lhs.key < rhs.key }
                 return lhs.value > rhs.value
             }
-            .prefix(16)
+            .prefix(20)
             .map(\.key)
         
         var nodes: [GraphNode] = []
         var positions: [String: CGPoint] = [:]
-        var edgeWeights: [String: Int] = [:]
+        var edgeMeta: [String: EdgeAggregate] = [:]
         
-        for (index, movie) in trimmedMovies.enumerated() {
-            let node = GraphNode(
-                id: "movie::\(movie.id.uuidString)",
-                title: movie.title,
-                kind: .movie,
-                reference: movie.id.uuidString
-            )
+        for (index, movie) in selectedMovies.enumerated() {
+            let node = GraphNode(id: "movie::\(movie.id.uuidString)", title: movie.title, kind: .movie, reference: movie.id.uuidString)
             nodes.append(node)
-            positions[node.id] = ringPosition(index: index, total: max(trimmedMovies.count, 1), radius: 0.73, phase: 0.0)
+            positions[node.id] = ringPosition(index: index, total: max(selectedMovies.count, 1), radius: 0.76, phase: 0.0)
         }
         
-        for (index, show) in trimmedShows.enumerated() {
-            let node = GraphNode(
-                id: "show::\(show.id.uuidString)",
-                title: show.title,
-                kind: .tvShow,
-                reference: show.id.uuidString
-            )
+        for (index, show) in selectedShows.enumerated() {
+            let node = GraphNode(id: "show::\(show.id.uuidString)", title: show.title, kind: .tvShow, reference: show.id.uuidString)
             nodes.append(node)
-            positions[node.id] = ringPosition(index: index, total: max(trimmedShows.count, 1), radius: 0.54, phase: .pi / 6)
+            positions[node.id] = ringPosition(index: index, total: max(selectedShows.count, 1), radius: 0.57, phase: .pi / 8)
         }
         
         for (index, theme) in topThemes.enumerated() {
-            let node = GraphNode(
-                id: "theme::\(theme)",
-                title: theme,
-                kind: .theme,
-                reference: theme
-            )
+            let node = GraphNode(id: "theme::\(theme)", title: theme, kind: .theme, reference: theme)
             nodes.append(node)
-            positions[node.id] = ringPosition(index: index, total: max(topThemes.count, 1), radius: 0.3, phase: .pi / 12)
+            positions[node.id] = ringPosition(index: index, total: max(topThemes.count, 1), radius: 0.33, phase: .pi / 12)
         }
         
         let topThemeSet = Set(topThemes)
         
-        for movie in trimmedMovies {
+        for movie in selectedMovies {
             let fromID = "movie::\(movie.id.uuidString)"
             for theme in movie.themes where topThemeSet.contains(theme) {
-                let toID = "theme::\(theme)"
-                incrementEdgeWeight(fromID: fromID, toID: toID, in: &edgeWeights)
+                incrementEdge(fromID: fromID, toID: "theme::\(theme)", source: .theme, in: &edgeMeta)
             }
         }
         
-        for show in trimmedShows {
+        for show in selectedShows {
             let fromID = "show::\(show.id.uuidString)"
             for theme in show.themes where topThemeSet.contains(theme) {
-                let toID = "theme::\(theme)"
-                incrementEdgeWeight(fromID: fromID, toID: toID, in: &edgeWeights)
+                incrementEdge(fromID: fromID, toID: "theme::\(theme)", source: .theme, in: &edgeMeta)
             }
         }
         
-        let movieIDs = Set(trimmedMovies.map { $0.id.uuidString })
-        let showIDs = Set(trimmedShows.map { $0.id.uuidString })
+        let movieIDs = Set(selectedMovies.map { $0.id.uuidString })
+        let showIDs = Set(selectedShows.map { $0.id.uuidString })
         
         for collection in collections {
             let members = (collection.movieIDs.filter { movieIDs.contains($0) }.map { "movie::\($0)" }
                 + collection.showIDs.filter { showIDs.contains($0) }.map { "show::\($0)" })
             
-            if members.count < 2 { continue }
+            guard members.count >= 2 else { continue }
             
             for i in 0..<(members.count - 1) {
                 for j in (i + 1)..<members.count {
-                    incrementEdgeWeight(fromID: members[i], toID: members[j], in: &edgeWeights)
+                    incrementEdge(fromID: members[i], toID: members[j], source: .collection, in: &edgeMeta)
                 }
             }
         }
         
-        let edges = edgeWeights.map { key, weight -> GraphEdge in
+        let edges = edgeMeta.map { key, value -> GraphEdge in
             let ids = key.split(separator: "|").map(String.init)
-            return GraphEdge(id: key, fromID: ids[0], toID: ids[1], weight: weight)
+            return GraphEdge(
+                id: key,
+                fromID: ids[0],
+                toID: ids[1],
+                weight: value.weight,
+                source: value.source
+            )
         }
         
         return GraphData(nodes: nodes, edges: edges, positions: positions)
@@ -293,9 +299,241 @@ struct ConstellationGraphView: View {
         return CGPoint(x: cos(angle) * radius, y: sin(angle) * radius)
     }
     
-    private func incrementEdgeWeight(fromID: String, toID: String, in storage: inout [String: Int]) {
+    private func incrementEdge(fromID: String, toID: String, source: GraphEdgeSource, in storage: inout [String: EdgeAggregate]) {
         let key = fromID < toID ? "\(fromID)|\(toID)" : "\(toID)|\(fromID)"
-        storage[key, default: 0] += 1
+        var current = storage[key] ?? EdgeAggregate(weight: 0, source: source)
+        current.weight += 1
+        current.source = current.source.merged(with: source)
+        storage[key] = current
+    }
+}
+
+private struct BrainPortalButton: View {
+    let action: () -> Void
+    @State private var pulse = false
+    
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [Color.cyan.opacity(0.55), Color.indigo.opacity(0.1)],
+                            center: .center,
+                            startRadius: 4,
+                            endRadius: 36
+                        )
+                    )
+                    .frame(width: pulse ? 54 : 44, height: pulse ? 54 : 44)
+                
+                Image(systemName: "brain.head.profile")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(Color.white)
+                    .shadow(color: .cyan.opacity(0.7), radius: 5)
+            }
+        }
+        .buttonStyle(.plain)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                pulse = true
+            }
+        }
+    }
+}
+
+private struct ImmersiveConstellationView: View {
+    let graph: GraphData
+    let filter: GraphFilter
+    let onClose: () -> Void
+    let onOpenNode: (GraphNode) -> Void
+    
+    @State private var selectedNodeID: String?
+    @State private var zoom: CGFloat = 1.0
+    @State private var pan: CGSize = .zero
+    
+    private var visibleNodes: [GraphNode] {
+        let kinds = filter.visibleKinds
+        return graph.nodes.filter { kinds.contains($0.kind) }
+    }
+    
+    private var visibleEdges: [GraphEdge] {
+        let ids = Set(visibleNodes.map(\.id))
+        return graph.edges.filter { ids.contains($0.fromID) && ids.contains($0.toID) }
+    }
+    
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color(red: 0.03, green: 0.05, blue: 0.12), Color(red: 0.04, green: 0.01, blue: 0.18), Color.black],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+            
+            StarfieldBackground()
+                .ignoresSafeArea()
+            
+            VStack(spacing: 0) {
+                HStack {
+                    Button(action: onClose) {
+                        Label("Back", systemImage: "chevron.left")
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.white.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+                    
+                    Spacer()
+                    
+                    Text("Neural Constellation")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    
+                    Spacer()
+                    
+                    if let selected = visibleNodes.first(where: { $0.id == selectedNodeID }) {
+                        Button("Open") {
+                            onOpenNode(selected)
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.cyan.opacity(0.24))
+                        .clipShape(Capsule())
+                        .foregroundStyle(.white)
+                    } else {
+                        Color.clear.frame(width: 52, height: 1)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                
+                GeometryReader { proxy in
+                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                        ZStack {
+                            GraphEdgesLayer(edges: visibleEdges, size: proxy.size, positions: graph.positions, animated: true)
+                                .environment(\.graphAnimationTime, timeline.date.timeIntervalSinceReferenceDate)
+                            GraphNodesLayer(nodes: visibleNodes, size: proxy.size, positions: graph.positions, selectedNodeID: $selectedNodeID)
+                        }
+                        .scaleEffect(zoom)
+                        .offset(pan)
+                        .gesture(
+                            SimultaneousGesture(
+                                DragGesture().onChanged { value in
+                                    pan = value.translation
+                                },
+                                MagnificationGesture().onChanged { value in
+                                    zoom = min(max(value, 0.7), 2.5)
+                                }
+                            )
+                        )
+                    }
+                }
+                .padding(.top, 8)
+                .padding(.bottom, 20)
+            }
+        }
+        .foregroundStyle(.white)
+    }
+}
+
+private struct StarfieldBackground: View {
+    private let stars: [CGPoint] = (0..<110).map { index in
+        let x = CGFloat((index * 73) % 100) / 100.0
+        let y = CGFloat((index * 41) % 100) / 100.0
+        return CGPoint(x: x, y: y)
+    }
+    
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { timeline in
+            Canvas { context, size in
+                let t = timeline.date.timeIntervalSinceReferenceDate
+                
+                for (index, star) in stars.enumerated() {
+                    let phase = sin(t * 1.5 + Double(index) * 0.38)
+                    let alpha = 0.2 + (phase + 1.0) * 0.25
+                    let radius = 0.8 + CGFloat((phase + 1.0) * 0.65)
+                    let center = CGPoint(x: star.x * size.width, y: star.y * size.height)
+                    
+                    context.fill(
+                        Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)),
+                        with: .color(Color.white.opacity(alpha))
+                    )
+                }
+            }
+        }
+    }
+}
+
+private struct GraphEdgesLayer: View {
+    let edges: [GraphEdge]
+    let size: CGSize
+    let positions: [String: CGPoint]
+    let animated: Bool
+    
+    @Environment(\.graphAnimationTime) private var animationTime
+    
+    var body: some View {
+        ZStack {
+            ForEach(edges) { edge in
+                if let from = positions[edge.fromID], let to = positions[edge.toID] {
+                    let fromPoint = point(for: from, in: size)
+                    let toPoint = point(for: to, in: size)
+                    let line = Path { path in
+                        path.move(to: fromPoint)
+                        path.addLine(to: toPoint)
+                    }
+                    
+                    line
+                        .stroke(edge.baseColor.opacity(edge.opacity), lineWidth: edge.width)
+                    
+                    if animated && edge.source.containsCollection {
+                        let dashPhase = animationTime.remainder(dividingBy: 4) * 22
+                        line
+                            .stroke(
+                                edge.highlightColor.opacity(0.95),
+                                style: StrokeStyle(lineWidth: edge.width + 0.8, lineCap: .round, dash: [4, 10], dashPhase: dashPhase)
+                            )
+                    }
+                }
+            }
+        }
+    }
+    
+    private func point(for normalized: CGPoint, in size: CGSize) -> CGPoint {
+        let minSide = min(size.width, size.height)
+        return CGPoint(
+            x: size.width / 2 + normalized.x * minSide * 0.44,
+            y: size.height / 2 + normalized.y * minSide * 0.44
+        )
+    }
+}
+
+private struct GraphNodesLayer: View {
+    let nodes: [GraphNode]
+    let size: CGSize
+    let positions: [String: CGPoint]
+    @Binding var selectedNodeID: String?
+    
+    var body: some View {
+        ForEach(nodes) { node in
+            if let position = positions[node.id] {
+                GraphNodeBubble(node: node, isSelected: selectedNodeID == node.id)
+                    .position(point(for: position, in: size))
+                    .onTapGesture {
+                        selectedNodeID = node.id
+                    }
+            }
+        }
+    }
+    
+    private func point(for normalized: CGPoint, in size: CGSize) -> CGPoint {
+        let minSide = min(size.width, size.height)
+        return CGPoint(
+            x: size.width / 2 + normalized.x * minSide * 0.44,
+            y: size.height / 2 + normalized.y * minSide * 0.44
+        )
     }
 }
 
@@ -312,11 +550,12 @@ private struct GraphNodeBubble: View {
                     Text(node.kind.icon)
                         .font(.system(size: 11))
                 }
+                .shadow(color: node.kind.color.opacity(isSelected ? 0.7 : 0.2), radius: isSelected ? 10 : 3)
             
             Text(node.title)
                 .font(.caption2)
                 .lineLimit(1)
-                .frame(maxWidth: 74)
+                .frame(maxWidth: 84)
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 3)
@@ -341,9 +580,66 @@ private struct GraphEdge: Identifiable {
     let fromID: String
     let toID: String
     let weight: Int
+    let source: GraphEdgeSource
+    
+    var baseColor: Color {
+        switch source {
+        case .theme:
+            return Color.gray
+        case .collection:
+            return Color.cyan
+        case .hybrid:
+            return Color.mint
+        }
+    }
+    
+    var highlightColor: Color {
+        switch source {
+        case .theme:
+            return Color.gray
+        case .collection:
+            return Color.cyan
+        case .hybrid:
+            return Color.teal
+        }
+    }
+    
+    var width: CGFloat {
+        if source.containsCollection {
+            return weight > 1 ? 2.3 : 1.8
+        }
+        return weight > 1 ? 1.5 : 0.95
+    }
+    
+    var opacity: Double {
+        if source.containsCollection {
+            return weight > 1 ? 0.75 : 0.55
+        }
+        return weight > 1 ? 0.35 : 0.2
+    }
 }
 
-private enum GraphNodeKind {
+private struct EdgeAggregate {
+    var weight: Int
+    var source: GraphEdgeSource
+}
+
+private enum GraphEdgeSource {
+    case theme
+    case collection
+    case hybrid
+    
+    var containsCollection: Bool {
+        self == .collection || self == .hybrid
+    }
+    
+    func merged(with other: GraphEdgeSource) -> GraphEdgeSource {
+        if self == other { return self }
+        return .hybrid
+    }
+}
+
+private enum GraphNodeKind: Hashable {
     case movie
     case tvShow
     case theme
@@ -400,4 +696,15 @@ private enum GraphFilter: CaseIterable {
 
 private struct ThemeSelection: Identifiable {
     let id: String
+}
+
+private struct GraphAnimationTimeKey: EnvironmentKey {
+    static let defaultValue: TimeInterval = 0
+}
+
+private extension EnvironmentValues {
+    var graphAnimationTime: TimeInterval {
+        get { self[GraphAnimationTimeKey.self] }
+        set { self[GraphAnimationTimeKey.self] = newValue }
+    }
 }
