@@ -12,7 +12,10 @@ import SwiftData
 struct ConstellationApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            Movie.self,
+            TVShow.self,
+            Theme.self,
+            ItemCollection.self
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
