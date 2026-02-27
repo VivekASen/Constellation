@@ -19,6 +19,7 @@ struct ConstellationGraphView: View {
     @State private var showImmersiveMode = false
     @State private var selectedThemeFilter: String = GraphFilterToken.all
     @State private var selectedCollectionFilter: String = GraphFilterToken.all
+    @State private var densityMode: GraphDensityMode = .simple
     
     @State private var selectedMovie: Movie?
     @State private var selectedTVShow: TVShow?
@@ -34,8 +35,10 @@ struct ConstellationGraphView: View {
         let visibleKinds = filter.visibleKinds
         let visibleNodes = graph.nodes.filter { visibleKinds.contains($0.kind) }
         let visibleNodeIDs = Set(visibleNodes.map(\.id))
-        let visibleEdges = graph.edges.filter { visibleNodeIDs.contains($0.fromID) && visibleNodeIDs.contains($0.toID) }
-        let showDenseLabels = visibleNodes.count <= 22 || selectedTheme != nil || selectedCollection != nil
+        let allVisibleEdges = graph.edges.filter { visibleNodeIDs.contains($0.fromID) && visibleNodeIDs.contains($0.toID) }
+        let visibleEdges = densityMode == .simple ? Array(allVisibleEdges.prefix(70)) : allVisibleEdges
+        
+        let showDenseLabels = densityMode == .detailed || visibleNodes.count <= 22 || selectedTheme != nil || selectedCollection != nil
         
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
@@ -67,6 +70,13 @@ struct ConstellationGraphView: View {
                     .clipShape(Capsule())
                 }
             }
+            
+            Picker("Density", selection: $densityMode) {
+                ForEach(GraphDensityMode.allCases, id: \.self) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
             
             HStack(spacing: 8) {
                 Menu {
@@ -861,6 +871,18 @@ private enum GraphFilter: CaseIterable {
         case .movies: return [.movie, .theme]
         case .tvShows: return [.tvShow, .theme]
         case .themes: return [.theme]
+        }
+    }
+}
+
+private enum GraphDensityMode: CaseIterable {
+    case simple
+    case detailed
+    
+    var title: String {
+        switch self {
+        case .simple: return "Simple"
+        case .detailed: return "Detailed"
         }
     }
 }
