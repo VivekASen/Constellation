@@ -207,11 +207,11 @@ struct ConstellationGraphView: View {
         
         let selectedMovies = Array(
             movies.filter { recentMovieIDs.contains($0.id.uuidString) || collectionMovieIDs.contains($0.id.uuidString) }
-                .prefix(24)
+                .prefix(16)
         )
         let selectedShows = Array(
             tvShows.filter { recentShowIDs.contains($0.id.uuidString) || collectionShowIDs.contains($0.id.uuidString) }
-                .prefix(24)
+                .prefix(16)
         )
         
         let themeCounts = Dictionary(grouping: (selectedMovies.flatMap(\.themes) + selectedShows.flatMap(\.themes)), by: { $0 })
@@ -222,7 +222,7 @@ struct ConstellationGraphView: View {
                 if lhs.value == rhs.value { return lhs.key < rhs.key }
                 return lhs.value > rhs.value
             }
-            .prefix(20)
+            .prefix(12)
             .map(\.key)
         
         var nodes: [GraphNode] = []
@@ -289,8 +289,16 @@ struct ConstellationGraphView: View {
                 source: value.source
             )
         }
+        let prioritizedEdges = edges
+            .sorted {
+                if $0.source.priority == $1.source.priority {
+                    return $0.weight > $1.weight
+                }
+                return $0.source.priority > $1.source.priority
+            }
+            .prefix(130)
         
-        return GraphData(nodes: nodes, edges: edges, positions: positions)
+        return GraphData(nodes: nodes, edges: Array(prioritizedEdges), positions: positions)
     }
     
     private func ringPosition(index: Int, total: Int, radius: CGFloat, phase: CGFloat) -> CGPoint {
@@ -517,13 +525,27 @@ private struct GraphNodesLayer: View {
     @Binding var selectedNodeID: String?
     
     var body: some View {
-        ForEach(nodes) { node in
-            if let position = positions[node.id] {
-                GraphNodeBubble(node: node, isSelected: selectedNodeID == node.id)
-                    .position(point(for: position, in: size))
-                    .onTapGesture {
-                        selectedNodeID = node.id
-                    }
+        ZStack {
+            ForEach(nodes) { node in
+                if let position = positions[node.id] {
+                    GraphNodeBubble(node: node, isSelected: selectedNodeID == node.id)
+                        .position(point(for: position, in: size))
+                        .onTapGesture {
+                            selectedNodeID = node.id
+                        }
+                }
+            }
+            
+            if let selectedNodeID,
+               let selectedNode = nodes.first(where: { $0.id == selectedNodeID }),
+               let selectedPosition = positions[selectedNodeID] {
+                SelectedNodeLabel(node: selectedNode)
+                    .position(
+                        CGPoint(
+                            x: point(for: selectedPosition, in: size).x,
+                            y: point(for: selectedPosition, in: size).y - 24
+                        )
+                    )
             }
         }
     }
@@ -542,23 +564,40 @@ private struct GraphNodeBubble: View {
     let isSelected: Bool
     
     var body: some View {
-        VStack(spacing: 2) {
-            Circle()
-                .fill(node.kind.color.opacity(isSelected ? 0.95 : 0.8))
-                .frame(width: isSelected ? 26 : 22, height: isSelected ? 26 : 22)
-                .overlay {
-                    Text(node.kind.icon)
-                        .font(.system(size: 11))
-                }
-                .shadow(color: node.kind.color.opacity(isSelected ? 0.7 : 0.2), radius: isSelected ? 10 : 3)
-            
-            Text(node.title)
-                .font(.caption2)
-                .lineLimit(1)
-                .frame(maxWidth: 84)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 3)
+        Circle()
+            .fill(node.kind.color.opacity(isSelected ? 0.95 : 0.8))
+            .frame(width: isSelected ? 26 : 22, height: isSelected ? 26 : 22)
+            .overlay {
+                Text(node.kind.icon)
+                    .font(.system(size: 11))
+            }
+            .shadow(color: node.kind.color.opacity(isSelected ? 0.7 : 0.2), radius: isSelected ? 10 : 3)
+            .overlay {
+                Circle()
+                    .stroke(Color.white.opacity(isSelected ? 0.6 : 0.0), lineWidth: 1)
+                    .frame(width: isSelected ? 30 : 24, height: isSelected ? 30 : 24)
+                    .blur(radius: isSelected ? 0.4 : 0)
+            }
+    }
+}
+
+private struct SelectedNodeLabel: View {
+    let node: GraphNode
+    
+    var body: some View {
+        Text(node.title)
+            .font(.caption2.weight(.semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.ultraThinMaterial)
+            .clipShape(Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(node.kind.color.opacity(0.35), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.22), radius: 3)
+            .frame(maxWidth: 140)
     }
 }
 
@@ -636,6 +675,14 @@ private enum GraphEdgeSource {
     func merged(with other: GraphEdgeSource) -> GraphEdgeSource {
         if self == other { return self }
         return .hybrid
+    }
+    
+    var priority: Int {
+        switch self {
+        case .hybrid: return 3
+        case .collection: return 2
+        case .theme: return 1
+        }
     }
 }
 
