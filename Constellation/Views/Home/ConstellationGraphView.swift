@@ -20,6 +20,8 @@ struct ConstellationGraphView: View {
     @State private var selectedThemeFilter: String = GraphFilterToken.all
     @State private var selectedCollectionFilter: String = GraphFilterToken.all
     @State private var densityMode: GraphDensityMode = .simple
+    @State private var panStart: CGSize = .zero
+    @State private var zoomStart: CGFloat = 1.0
     
     @State private var selectedMovie: Movie?
     @State private var selectedTVShow: TVShow?
@@ -31,14 +33,14 @@ struct ConstellationGraphView: View {
         let selectedTheme = selectedThemeFilter == GraphFilterToken.all ? nil : selectedThemeFilter
         let selectedCollection = selectedCollectionFilter == GraphFilterToken.all ? nil : selectedCollectionFilter
         
-        let graph = buildGraph(themeFilter: selectedTheme, collectionFilter: selectedCollection)
+        let graph = buildGraph(themeFilter: selectedTheme, collectionFilter: selectedCollection, densityMode: densityMode)
         let visibleKinds = filter.visibleKinds
         let visibleNodes = graph.nodes.filter { visibleKinds.contains($0.kind) }
         let visibleNodeIDs = Set(visibleNodes.map(\.id))
         let allVisibleEdges = graph.edges.filter { visibleNodeIDs.contains($0.fromID) && visibleNodeIDs.contains($0.toID) }
         let visibleEdges = densityMode == .simple ? Array(allVisibleEdges.prefix(70)) : allVisibleEdges
         
-        let showDenseLabels = densityMode == .detailed || visibleNodes.count <= 22 || selectedTheme != nil || selectedCollection != nil
+        let showDenseLabels = densityMode == .detailed || selectedTheme != nil || selectedCollection != nil
         
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
@@ -133,18 +135,8 @@ struct ConstellationGraphView: View {
                     )
                     .scaleEffect(zoom)
                     .offset(pan)
-                    .gesture(
-                        SimultaneousGesture(
-                            DragGesture()
-                                .onChanged { value in
-                                    pan = value.translation
-                                },
-                            MagnificationGesture()
-                                .onChanged { value in
-                                    zoom = min(max(value, 0.7), 2.2)
-                                }
-                        )
-                    )
+                    .contentShape(Rectangle())
+                    .gesture(graphGesture(maxZoom: 2.2))
                     
                     if visibleNodes.isEmpty {
                         ContentUnavailableView(
@@ -266,19 +258,22 @@ struct ConstellationGraphView: View {
         }
     }
     
-    private func buildGraph(themeFilter: String?, collectionFilter: String?) -> GraphData {
+    private func buildGraph(themeFilter: String?, collectionFilter: String?, densityMode: GraphDensityMode) -> GraphData {
         let recentMovieIDs = Set(movies.prefix(14).map { $0.id.uuidString })
         let recentShowIDs = Set(tvShows.prefix(14).map { $0.id.uuidString })
         let collectionMovieIDs = Set(collections.flatMap(\.movieIDs))
         let collectionShowIDs = Set(collections.flatMap(\.showIDs))
+        let movieCap = densityMode == .simple ? 10 : 18
+        let showCap = densityMode == .simple ? 10 : 18
+        let themeCap = densityMode == .simple ? 6 : 12
         
         var selectedMovies = Array(
             movies.filter { recentMovieIDs.contains($0.id.uuidString) || collectionMovieIDs.contains($0.id.uuidString) }
-                .prefix(16)
+                .prefix(movieCap)
         )
         var selectedShows = Array(
             tvShows.filter { recentShowIDs.contains($0.id.uuidString) || collectionShowIDs.contains($0.id.uuidString) }
-                .prefix(16)
+                .prefix(showCap)
         )
         
         if let collectionFilter,
@@ -297,13 +292,18 @@ struct ConstellationGraphView: View {
         let themeCounts = Dictionary(grouping: (selectedMovies.flatMap(\.themes) + selectedShows.flatMap(\.themes)), by: { $0 })
             .mapValues(\.count)
         
-        let topThemes = themeCounts
-            .sorted { lhs, rhs in
-                if lhs.value == rhs.value { return lhs.key < rhs.key }
-                return lhs.value > rhs.value
-            }
-            .prefix(themeFilter == nil ? 12 : 8)
-            .map(\.key)
+        let topThemes: [String]
+        if let themeFilter {
+            topThemes = themeCounts.keys.contains(themeFilter) ? [themeFilter] : []
+        } else {
+            topThemes = themeCounts
+                .sorted { lhs, rhs in
+                    if lhs.value == rhs.value { return lhs.key < rhs.key }
+                    return lhs.value > rhs.value
+                }
+                .prefix(themeCap)
+                .map(\.key)
+        }
         
         var nodes: [GraphNode] = []
         var positions: [String: CGPoint] = [:]
@@ -381,6 +381,28 @@ struct ConstellationGraphView: View {
         return GraphData(nodes: nodes, edges: Array(prioritizedEdges), positions: positions)
     }
     
+    private func graphGesture(maxZoom: CGFloat) -> some Gesture {
+        SimultaneousGesture(
+            DragGesture()
+                .onChanged { value in
+                    pan = CGSize(
+                        width: panStart.width + value.translation.width,
+                        height: panStart.height + value.translation.height
+                    )
+                }
+                .onEnded { _ in
+                    panStart = pan
+                },
+            MagnificationGesture()
+                .onChanged { value in
+                    zoom = min(max(zoomStart * value, 0.65), maxZoom)
+                }
+                .onEnded { _ in
+                    zoomStart = zoom
+                }
+        )
+    }
+    
     private func ringPosition(index: Int, total: Int, radius: CGFloat, phase: CGFloat) -> CGPoint {
         guard total > 0 else { return .zero }
         let angle = (CGFloat(index) / CGFloat(total)) * (.pi * 2) + phase
@@ -439,6 +461,8 @@ private struct ImmersiveConstellationView: View {
     @State private var selectedNodeID: String?
     @State private var zoom: CGFloat = 1.0
     @State private var pan: CGSize = .zero
+    @State private var panStart: CGSize = .zero
+    @State private var zoomStart: CGFloat = 1.0
     
     private var visibleNodes: [GraphNode] {
         let kinds = filter.visibleKinds
@@ -513,16 +537,8 @@ private struct ImmersiveConstellationView: View {
                         }
                         .scaleEffect(zoom)
                         .offset(pan)
-                        .gesture(
-                            SimultaneousGesture(
-                                DragGesture().onChanged { value in
-                                    pan = value.translation
-                                },
-                                MagnificationGesture().onChanged { value in
-                                    zoom = min(max(value, 0.7), 2.5)
-                                }
-                            )
-                        )
+                        .contentShape(Rectangle())
+                        .gesture(graphGesture(maxZoom: 2.5))
                     }
                 }
                 .padding(.top, 8)
@@ -530,6 +546,28 @@ private struct ImmersiveConstellationView: View {
             }
         }
         .foregroundStyle(.white)
+    }
+    
+    private func graphGesture(maxZoom: CGFloat) -> some Gesture {
+        SimultaneousGesture(
+            DragGesture()
+                .onChanged { value in
+                    pan = CGSize(
+                        width: panStart.width + value.translation.width,
+                        height: panStart.height + value.translation.height
+                    )
+                }
+                .onEnded { _ in
+                    panStart = pan
+                },
+            MagnificationGesture()
+                .onChanged { value in
+                    zoom = min(max(zoomStart * value, 0.65), maxZoom)
+                }
+                .onEnded { _ in
+                    zoomStart = zoom
+                }
+        )
     }
 }
 
