@@ -11,8 +11,12 @@ import SwiftData
 struct CollectionsView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ItemCollection.createdDate, order: .reverse) private var collections: [ItemCollection]
+    @Query private var movies: [Movie]
+    @Query private var tvShows: [TVShow]
     
     @State private var showingCreateCollection = false
+    @State private var autoGenerationSummary = ""
+    @State private var showingAutoGenerationSummary = false
     
     var body: some View {
         NavigationStack {
@@ -42,7 +46,13 @@ struct CollectionsView: View {
             }
             .navigationTitle("Collections")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        generateAutoCollections()
+                    } label: {
+                        Label("Generate Auto Collections", systemImage: "sparkles")
+                    }
+                    
                     Button {
                         showingCreateCollection = true
                     } label: {
@@ -53,7 +63,24 @@ struct CollectionsView: View {
             .sheet(isPresented: $showingCreateCollection) {
                 CreateCollectionView()
             }
+            .alert("Auto Collections Updated", isPresented: $showingAutoGenerationSummary) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(autoGenerationSummary)
+            }
         }
+    }
+    
+    private func generateAutoCollections() {
+        let result = CollectionGenerator.shared.generateThemeCollections(
+            movies: movies,
+            tvShows: tvShows,
+            existingCollections: collections,
+            modelContext: modelContext
+        )
+        
+        autoGenerationSummary = "Created \(result.created), updated \(result.updated), based on \(result.consideredThemes) high-signal theme(s)."
+        showingAutoGenerationSummary = true
     }
     
     private func deleteCollections(at offsets: IndexSet) {
@@ -98,10 +125,17 @@ struct CollectionRow: View {
                 }
                 
                 if let desc = collection.desc, !desc.isEmpty {
-                    Text(desc)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if desc.hasPrefix("auto-theme::") {
+                        Text("Auto-generated from shared themes")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    } else {
+                        Text(desc)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 
                 Text("\(collection.totalItemCount) item\(collection.totalItemCount == 1 ? "" : "s")")

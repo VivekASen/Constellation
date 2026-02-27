@@ -163,8 +163,65 @@ struct SmartDiscoveryResultsView: View {
     let result: DiscoveryResult
     let onAddMovie: (TMDBMovie) -> Void
     
+    @State private var selectedAnswers: [String: String] = [:]
+    
+    private var selectedFormat: String {
+        selectedAnswers["What format are you in the mood for?"] ?? "Any"
+    }
+    
+    private var selectedVibe: String? {
+        selectedAnswers["What vibe are you looking for?"]
+    }
+    
+    private var filteredMovies: [Movie] {
+        var items = result.inLibraryMovies
+        
+        if selectedFormat == "TV Shows" {
+            items = []
+        }
+        
+        if let vibe = selectedVibe {
+            items = items.filter { matchesVibe(movie: $0, vibe: vibe) }
+        }
+        
+        return items
+    }
+    
+    private var filteredTVShows: [TVShow] {
+        var items = result.inLibraryTVShows
+        
+        if selectedFormat == "Movies" {
+            items = []
+        }
+        
+        if let vibe = selectedVibe {
+            items = items.filter { matchesVibe(show: $0, vibe: vibe) }
+        }
+        
+        return items
+    }
+    
+    private var filteredRecommendations: [TMDBMovie] {
+        var items = result.recommendations
+        
+        if selectedFormat == "TV Shows" {
+            items = []
+        }
+        
+        if let vibe = selectedVibe {
+            items = items.filter { matchesVibe(recommendation: $0, vibe: vibe) }
+        }
+        
+        return items
+    }
+    
+    private var filteredConnections: [Connection] {
+        let validTitles = Set(filteredMovies.map(\.title) + filteredTVShows.map(\.title))
+        return result.connections.filter { validTitles.contains($0.from) && validTitles.contains($0.to) }
+    }
+    
     var totalLibraryMatches: Int {
-        result.inLibraryMovies.count + result.inLibraryTVShows.count
+        filteredMovies.count + filteredTVShows.count
     }
     
     var body: some View {
@@ -197,15 +254,17 @@ struct SmartDiscoveryResultsView: View {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 8) {
                                     ForEach(question.options, id: \.self) { option in
+                                        let isSelected = selectedAnswers[question.text] == option
+                                        
                                         Button(action: {
-                                            print("User selected: \(option) for question: \(question.text)")
+                                            selectedAnswers[question.text] = option
                                         }) {
                                             Text(option)
                                                 .font(.caption)
                                                 .padding(.horizontal, 12)
                                                 .padding(.vertical, 6)
-                                                .background(Color.blue.opacity(0.1))
-                                                .foregroundStyle(.blue)
+                                                .background(isSelected ? Color.blue.opacity(0.2) : Color.blue.opacity(0.1))
+                                                .foregroundStyle(isSelected ? .blue : .blue)
                                                 .cornerRadius(16)
                                         }
                                     }
@@ -235,14 +294,14 @@ struct SmartDiscoveryResultsView: View {
                     }
                     .padding(.horizontal)
                     
-                    if !result.connections.isEmpty {
+                    if !filteredConnections.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("💡 Connections I found:")
                                 .font(.caption)
                                 .fontWeight(.medium)
                                 .padding(.horizontal)
                             
-                            ForEach(result.connections.prefix(3), id: \.reason) { connection in
+                            ForEach(filteredConnections.prefix(3), id: \.reason) { connection in
                                 Text("• \(connection.from) & \(connection.to): \(connection.reason)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -256,12 +315,12 @@ struct SmartDiscoveryResultsView: View {
                         .padding(.horizontal)
                     }
                     
-                    if !result.inLibraryMovies.isEmpty {
+                    if !filteredMovies.isEmpty {
                         Text("Movies")
                             .font(.headline)
                             .padding(.horizontal)
                         
-                        ForEach(result.inLibraryMovies) { movie in
+                        ForEach(filteredMovies) { movie in
                             NavigationLink(destination: MovieDetailView(movie: movie)) {
                                 LibraryMovieCard(movie: movie)
                             }
@@ -269,12 +328,12 @@ struct SmartDiscoveryResultsView: View {
                         }
                     }
                     
-                    if !result.inLibraryTVShows.isEmpty {
+                    if !filteredTVShows.isEmpty {
                         Text("TV Shows")
                             .font(.headline)
                             .padding(.horizontal)
                         
-                        ForEach(result.inLibraryTVShows) { show in
+                        ForEach(filteredTVShows) { show in
                             NavigationLink(destination: TVShowDetailView(show: show)) {
                                 LibraryTVShowCard(show: show)
                             }
@@ -284,7 +343,7 @@ struct SmartDiscoveryResultsView: View {
                 }
             }
             
-            if !result.recommendations.isEmpty {
+            if !filteredRecommendations.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
@@ -299,13 +358,13 @@ struct SmartDiscoveryResultsView: View {
                         
                         Spacer()
                         
-                        Text("\(result.recommendations.count)")
+                        Text("\(filteredRecommendations.count)")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                     .padding(.horizontal)
                     
-                    ForEach(result.recommendations) { movie in
+                    ForEach(filteredRecommendations) { movie in
                         RecommendationMovieCard(movie: movie)
                             .onTapGesture {
                                 onAddMovie(movie)
@@ -314,15 +373,53 @@ struct SmartDiscoveryResultsView: View {
                 }
             }
             
-            if !result.hasResults {
+            if !hasFilteredResults {
                 ContentUnavailableView(
                     "No Matches Yet",
                     systemImage: "magnifyingglass",
-                    description: Text("Try searching for something else or add more media to find connections")
+                    description: Text("Try another answer above or adjust your search.")
                 )
                 .padding(.top, 60)
             }
         }
+    }
+    
+    private var hasFilteredResults: Bool {
+        !filteredMovies.isEmpty || !filteredTVShows.isEmpty || !filteredRecommendations.isEmpty
+    }
+    
+    private func matchesVibe(movie: Movie, vibe: String) -> Bool {
+        let haystack = (movie.genres + movie.themes + [movie.title, movie.overview ?? ""]).joined(separator: " ").lowercased()
+        return matchesVibe(haystack: haystack, vibe: vibe)
+    }
+    
+    private func matchesVibe(show: TVShow, vibe: String) -> Bool {
+        let haystack = (show.genres + show.themes + [show.title, show.overview ?? ""]).joined(separator: " ").lowercased()
+        return matchesVibe(haystack: haystack, vibe: vibe)
+    }
+    
+    private func matchesVibe(recommendation: TMDBMovie, vibe: String) -> Bool {
+        let haystack = [recommendation.title, recommendation.overview ?? ""].joined(separator: " ").lowercased()
+        return matchesVibe(haystack: haystack, vibe: vibe)
+    }
+    
+    private func matchesVibe(haystack: String, vibe: String) -> Bool {
+        let keywords: [String]
+        
+        switch vibe {
+        case "Action-packed":
+            keywords = ["action", "thriller", "war", "adventure", "crime", "survival"]
+        case "Thoughtful":
+            keywords = ["drama", "philosophy", "social", "identity", "political", "moral"]
+        case "Fun & light":
+            keywords = ["comedy", "feel-good", "adventure", "friendship", "family"]
+        case "Dark & serious":
+            keywords = ["dark", "crime", "psychological", "war", "revenge", "dystopia"]
+        default:
+            return true
+        }
+        
+        return keywords.contains { haystack.contains($0) }
     }
 }
 

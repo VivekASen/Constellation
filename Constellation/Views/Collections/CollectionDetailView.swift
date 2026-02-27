@@ -5,7 +5,6 @@
 //  Created by Vivek  Sen on 2/27/26.
 //
 
-
 import SwiftUI
 import SwiftData
 
@@ -18,6 +17,7 @@ struct CollectionDetailView: View {
     
     @State private var showingAddItems = false
     @State private var showingEditMetadata = false
+    @State private var generatingInsight = false
     
     var collectionMovies: [Movie] {
         let ids = Set(collection.movieIDs)
@@ -38,9 +38,15 @@ struct CollectionDetailView: View {
                         .fontWeight(.bold)
                     
                     if let desc = collection.desc, !desc.isEmpty {
-                        Text(desc)
-                            .font(.body)
-                            .foregroundStyle(.secondary)
+                        if desc.hasPrefix("auto-theme::") {
+                            Text("Auto-generated from your shared theme graph")
+                                .font(.body)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text(desc)
+                                .font(.body)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     
                     HStack(spacing: 12) {
@@ -56,6 +62,33 @@ struct CollectionDetailView: View {
                     }
                 }
                 .padding(.vertical, 4)
+            }
+            
+            Section("Collection Insight") {
+                if let insight = collection.aiInsight, !insight.isEmpty {
+                    Text(insight)
+                        .font(.body)
+                } else {
+                    Text("No insight yet. Generate one to summarize how these items connect.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                
+                Button {
+                    Task {
+                        await generateInsight()
+                    }
+                } label: {
+                    if generatingInsight {
+                        HStack {
+                            ProgressView()
+                            Text("Generating...")
+                        }
+                    } else {
+                        Label("Generate Insight", systemImage: "brain")
+                    }
+                }
+                .disabled(generatingInsight || (collectionMovies.isEmpty && collectionTVShows.isEmpty))
             }
             
             if !collectionMovies.isEmpty {
@@ -152,12 +185,26 @@ struct CollectionDetailView: View {
     
     private func removeMovie(_ movie: Movie) {
         collection.removeItem(id: movie.id, type: .movie)
+        collection.aiInsight = nil
         try? modelContext.save()
     }
     
     private func removeTVShow(_ show: TVShow) {
         collection.removeItem(id: show.id, type: .tvShow)
+        collection.aiInsight = nil
         try? modelContext.save()
+    }
+    
+    private func generateInsight() async {
+        generatingInsight = true
+        let insight = await SynthesisEngine.shared.generateCollectionInsight(
+            collectionName: collection.name,
+            movies: collectionMovies,
+            tvShows: collectionTVShows
+        )
+        collection.aiInsight = insight
+        try? modelContext.save()
+        generatingInsight = false
     }
 }
 
@@ -246,6 +293,7 @@ struct AddItemsToCollectionView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
+                        collection.aiInsight = nil
                         try? modelContext.save()
                         dismiss()
                     }
@@ -286,7 +334,7 @@ struct AddItemsToCollectionView: View {
                 Spacer()
                 
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(selected ? .green : .tertiary)
+                    .foregroundStyle(selected ? Color.green : Color.secondary)
             }
         }
         .buttonStyle(.plain)
