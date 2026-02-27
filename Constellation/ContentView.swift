@@ -87,7 +87,18 @@ struct HomeView: View {
 
                     }
                     .padding(.horizontal)
-                    
+
+                    if totalItems > 0 {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ConstellationGraphView(
+                                movies: movies,
+                                tvShows: tvShows,
+                                collections: collections
+                            )
+                        }
+                        .padding(.horizontal)
+                    }
+
                     if !movies.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("Recent Movies")
