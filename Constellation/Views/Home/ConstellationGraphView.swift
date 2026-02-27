@@ -17,17 +17,25 @@ struct ConstellationGraphView: View {
     @State private var selectedNodeID: String?
     @State private var filter: GraphFilter = .all
     @State private var showImmersiveMode = false
+    @State private var selectedThemeFilter: String = GraphFilterToken.all
+    @State private var selectedCollectionFilter: String = GraphFilterToken.all
     
     @State private var selectedMovie: Movie?
     @State private var selectedTVShow: TVShow?
     @State private var selectedTheme: ThemeSelection?
     
     var body: some View {
-        let graph = buildGraph()
+        let themeOptions = Array(Set(movies.flatMap(\.themes) + tvShows.flatMap(\.themes))).sorted()
+        let collectionOptions = collections.sorted { $0.name < $1.name }
+        let selectedTheme = selectedThemeFilter == GraphFilterToken.all ? nil : selectedThemeFilter
+        let selectedCollection = selectedCollectionFilter == GraphFilterToken.all ? nil : selectedCollectionFilter
+        
+        let graph = buildGraph(themeFilter: selectedTheme, collectionFilter: selectedCollection)
         let visibleKinds = filter.visibleKinds
         let visibleNodes = graph.nodes.filter { visibleKinds.contains($0.kind) }
         let visibleNodeIDs = Set(visibleNodes.map(\.id))
         let visibleEdges = graph.edges.filter { visibleNodeIDs.contains($0.fromID) && visibleNodeIDs.contains($0.toID) }
+        let showDenseLabels = visibleNodes.count <= 22 || selectedTheme != nil || selectedCollection != nil
         
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
@@ -60,6 +68,46 @@ struct ConstellationGraphView: View {
                 }
             }
             
+            HStack(spacing: 8) {
+                Menu {
+                    Picker("Theme", selection: $selectedThemeFilter) {
+                        Text("All Themes").tag(GraphFilterToken.all)
+                        ForEach(themeOptions, id: \.self) { theme in
+                            Text(theme.replacingOccurrences(of: "-", with: " ").capitalized).tag(theme)
+                        }
+                    }
+                } label: {
+                    Label(
+                        selectedTheme == nil ? "Theme: All" : "Theme: \(selectedTheme!.replacingOccurrences(of: "-", with: " ").capitalized)",
+                        systemImage: "line.3.horizontal.decrease.circle"
+                    )
+                    .font(.caption)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.gray.opacity(0.14))
+                    .clipShape(Capsule())
+                }
+                
+                Menu {
+                    Picker("Collection", selection: $selectedCollectionFilter) {
+                        Text("All Collections").tag(GraphFilterToken.all)
+                        ForEach(collectionOptions, id: \.id) { collection in
+                            Text(collection.name).tag(collection.id.uuidString)
+                        }
+                    }
+                } label: {
+                    Label(
+                        selectedCollection == nil ? "Collection: All" : "Collection: 1 selected",
+                        systemImage: "square.stack.3d.up"
+                    )
+                    .font(.caption)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.gray.opacity(0.14))
+                    .clipShape(Capsule())
+                }
+            }
+            
             GeometryReader { proxy in
                 ZStack {
                     RoundedRectangle(cornerRadius: 16)
@@ -70,7 +118,8 @@ struct ConstellationGraphView: View {
                         nodes: visibleNodes,
                         edges: visibleEdges,
                         positions: graph.positions,
-                        animated: false
+                        animated: false,
+                        showDenseLabels: showDenseLabels
                     )
                     .scaleEffect(zoom)
                     .offset(pan)
@@ -96,7 +145,7 @@ struct ConstellationGraphView: View {
                     }
                 }
             }
-            .frame(height: 330)
+            .frame(height: 390)
             
             if let selected = graph.nodes.first(where: { $0.id == selectedNodeID }) {
                 selectedNodePanel(selected)
@@ -115,6 +164,7 @@ struct ConstellationGraphView: View {
             ImmersiveConstellationView(
                 graph: graph,
                 filter: filter,
+                showDenseLabels: showDenseLabels,
                 onClose: { showImmersiveMode = false },
                 onOpenNode: { node in
                     showImmersiveMode = false
@@ -132,10 +182,17 @@ struct ConstellationGraphView: View {
         nodes: [GraphNode],
         edges: [GraphEdge],
         positions: [String: CGPoint],
-        animated: Bool
+        animated: Bool,
+        showDenseLabels: Bool
     ) -> some View {
         let edgeView = GraphEdgesLayer(edges: edges, size: size, positions: positions, animated: animated)
-        let nodeView = GraphNodesLayer(nodes: nodes, size: size, positions: positions, selectedNodeID: $selectedNodeID)
+        let nodeView = GraphNodesLayer(
+            nodes: nodes,
+            size: size,
+            positions: positions,
+            selectedNodeID: $selectedNodeID,
+            showDenseLabels: showDenseLabels
+        )
         
         if animated {
             TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
@@ -199,20 +256,33 @@ struct ConstellationGraphView: View {
         }
     }
     
-    private func buildGraph() -> GraphData {
+    private func buildGraph(themeFilter: String?, collectionFilter: String?) -> GraphData {
         let recentMovieIDs = Set(movies.prefix(14).map { $0.id.uuidString })
         let recentShowIDs = Set(tvShows.prefix(14).map { $0.id.uuidString })
         let collectionMovieIDs = Set(collections.flatMap(\.movieIDs))
         let collectionShowIDs = Set(collections.flatMap(\.showIDs))
         
-        let selectedMovies = Array(
+        var selectedMovies = Array(
             movies.filter { recentMovieIDs.contains($0.id.uuidString) || collectionMovieIDs.contains($0.id.uuidString) }
                 .prefix(16)
         )
-        let selectedShows = Array(
+        var selectedShows = Array(
             tvShows.filter { recentShowIDs.contains($0.id.uuidString) || collectionShowIDs.contains($0.id.uuidString) }
                 .prefix(16)
         )
+        
+        if let collectionFilter,
+           let collection = collections.first(where: { $0.id.uuidString == collectionFilter }) {
+            let movieSet = Set(collection.movieIDs)
+            let showSet = Set(collection.showIDs)
+            selectedMovies = selectedMovies.filter { movieSet.contains($0.id.uuidString) }
+            selectedShows = selectedShows.filter { showSet.contains($0.id.uuidString) }
+        }
+        
+        if let themeFilter {
+            selectedMovies = selectedMovies.filter { $0.themes.contains(themeFilter) }
+            selectedShows = selectedShows.filter { $0.themes.contains(themeFilter) }
+        }
         
         let themeCounts = Dictionary(grouping: (selectedMovies.flatMap(\.themes) + selectedShows.flatMap(\.themes)), by: { $0 })
             .mapValues(\.count)
@@ -222,7 +292,7 @@ struct ConstellationGraphView: View {
                 if lhs.value == rhs.value { return lhs.key < rhs.key }
                 return lhs.value > rhs.value
             }
-            .prefix(12)
+            .prefix(themeFilter == nil ? 12 : 8)
             .map(\.key)
         
         var nodes: [GraphNode] = []
@@ -232,19 +302,19 @@ struct ConstellationGraphView: View {
         for (index, movie) in selectedMovies.enumerated() {
             let node = GraphNode(id: "movie::\(movie.id.uuidString)", title: movie.title, kind: .movie, reference: movie.id.uuidString)
             nodes.append(node)
-            positions[node.id] = ringPosition(index: index, total: max(selectedMovies.count, 1), radius: 0.76, phase: 0.0)
+            positions[node.id] = ringPosition(index: index, total: max(selectedMovies.count, 1), radius: 0.86, phase: 0.0)
         }
         
         for (index, show) in selectedShows.enumerated() {
             let node = GraphNode(id: "show::\(show.id.uuidString)", title: show.title, kind: .tvShow, reference: show.id.uuidString)
             nodes.append(node)
-            positions[node.id] = ringPosition(index: index, total: max(selectedShows.count, 1), radius: 0.57, phase: .pi / 8)
+            positions[node.id] = ringPosition(index: index, total: max(selectedShows.count, 1), radius: 0.66, phase: .pi / 8)
         }
         
         for (index, theme) in topThemes.enumerated() {
             let node = GraphNode(id: "theme::\(theme)", title: theme, kind: .theme, reference: theme)
             nodes.append(node)
-            positions[node.id] = ringPosition(index: index, total: max(topThemes.count, 1), radius: 0.33, phase: .pi / 12)
+            positions[node.id] = ringPosition(index: index, total: max(topThemes.count, 1), radius: 0.42, phase: .pi / 12)
         }
         
         let topThemeSet = Set(topThemes)
@@ -352,6 +422,7 @@ private struct BrainPortalButton: View {
 private struct ImmersiveConstellationView: View {
     let graph: GraphData
     let filter: GraphFilter
+    let showDenseLabels: Bool
     let onClose: () -> Void
     let onOpenNode: (GraphNode) -> Void
     
@@ -422,7 +493,13 @@ private struct ImmersiveConstellationView: View {
                         ZStack {
                             GraphEdgesLayer(edges: visibleEdges, size: proxy.size, positions: graph.positions, animated: true)
                                 .environment(\.graphAnimationTime, timeline.date.timeIntervalSinceReferenceDate)
-                            GraphNodesLayer(nodes: visibleNodes, size: proxy.size, positions: graph.positions, selectedNodeID: $selectedNodeID)
+                            GraphNodesLayer(
+                                nodes: visibleNodes,
+                                size: proxy.size,
+                                positions: graph.positions,
+                                selectedNodeID: $selectedNodeID,
+                                showDenseLabels: showDenseLabels
+                            )
                         }
                         .scaleEffect(zoom)
                         .offset(pan)
@@ -523,6 +600,7 @@ private struct GraphNodesLayer: View {
     let size: CGSize
     let positions: [String: CGPoint]
     @Binding var selectedNodeID: String?
+    let showDenseLabels: Bool
     
     var body: some View {
         ZStack {
@@ -533,6 +611,12 @@ private struct GraphNodesLayer: View {
                         .onTapGesture {
                             selectedNodeID = node.id
                         }
+                    
+                    if shouldShowInlineLabel(for: node) {
+                        InlineNodeLabel(text: node.title, tint: node.kind.color)
+                            .position(labelPoint(for: position))
+                            .allowsHitTesting(false)
+                    }
                 }
             }
             
@@ -556,6 +640,26 @@ private struct GraphNodesLayer: View {
             x: size.width / 2 + normalized.x * minSide * 0.44,
             y: size.height / 2 + normalized.y * minSide * 0.44
         )
+    }
+    
+    private func labelPoint(for normalized: CGPoint) -> CGPoint {
+        let base = point(for: normalized, in: size)
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        let dx = base.x - center.x
+        let dy = base.y - center.y
+        let length = max(0.001, sqrt(dx * dx + dy * dy))
+        
+        let outward = CGFloat(26)
+        return CGPoint(
+            x: base.x + (dx / length) * outward,
+            y: base.y + (dy / length) * outward
+        )
+    }
+    
+    private func shouldShowInlineLabel(for node: GraphNode) -> Bool {
+        if selectedNodeID == node.id { return false }
+        if node.kind == .theme { return true }
+        return showDenseLabels
     }
 }
 
@@ -598,6 +702,26 @@ private struct SelectedNodeLabel: View {
             }
             .shadow(color: .black.opacity(0.22), radius: 3)
             .frame(maxWidth: 140)
+    }
+}
+
+private struct InlineNodeLabel: View {
+    let text: String
+    let tint: Color
+    
+    var body: some View {
+        Text(text)
+            .font(.caption2)
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(.ultraThinMaterial)
+            .clipShape(Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(tint.opacity(0.25), lineWidth: 0.8)
+            }
+            .frame(maxWidth: 110)
     }
 }
 
@@ -739,6 +863,10 @@ private enum GraphFilter: CaseIterable {
         case .themes: return [.theme]
         }
     }
+}
+
+private enum GraphFilterToken {
+    static let all = "__all__"
 }
 
 private struct ThemeSelection: Identifiable {
