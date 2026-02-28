@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import WebKit
 
 struct ConstellationGraphView: View {
     let movies: [Movie]
@@ -24,6 +25,7 @@ struct ConstellationGraphView: View {
     @State private var panStart: CGSize = .zero
     @State private var zoomStart: CGFloat = 1.0
     @State private var canvasSize: CGSize = .zero
+    @State private var webResetToken: Int = 0
     
     @State private var selectedMovie: Movie?
     @State private var selectedTVShow: TVShow?
@@ -151,23 +153,20 @@ struct ConstellationGraphView: View {
                     RoundedRectangle(cornerRadius: 16)
                         .fill(Color(.systemGray6))
                     
-                    graphLayer(
-                        size: proxy.size,
+                    ConstellationD3WebView(
                         nodes: renderedNodes,
                         edges: displayEdges,
-                        positions: graph.positions,
-                        animated: false,
-                        showDenseLabels: showDenseLabels,
-                        focusNodeIDs: focusNodeIDs,
-                        labelDensity: labelDensity
+                        selectedNodeID: $selectedNodeID,
+                        resetToken: webResetToken,
+                        labelDensity: labelDensity,
+                        onOpenNode: { nodeID in
+                            guard let node = renderedNodes.first(where: { $0.id == nodeID }) else { return }
+                            openNode(node)
+                        }
                     )
-                    .scaleEffect(zoom)
-                    .offset(pan)
-                    .contentShape(Rectangle())
-                    .gesture(graphGesture(maxZoom: 2.2))
-                    .onAppear { canvasSize = proxy.size }
-                    .onChange(of: proxy.size) { _, newValue in
-                        canvasSize = newValue
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .onAppear {
+                        canvasSize = proxy.size
                     }
                     
                     if visibleNodes.isEmpty {
@@ -221,16 +220,6 @@ struct ConstellationGraphView: View {
         .onChange(of: densityMode) { _, _ in resetViewport() }
         .onChange(of: labelDensity) { _, _ in
             selectedNodeID = nil
-        }
-        .onChange(of: selectedNodeID) { _, newValue in
-            guard let newValue else { return }
-            focusOnNode(
-                nodeID: newValue,
-                positions: graph.positions,
-                canvasSize: canvasSize,
-                targetZoom: 1.35,
-                maxZoom: 2.2
-            )
         }
     }
     
@@ -480,6 +469,7 @@ struct ConstellationGraphView: View {
             zoomStart = 1.0
             panStart = .zero
             selectedNodeID = nil
+            webResetToken += 1
         }
     }
 
@@ -1356,6 +1346,347 @@ private struct VisibleNodeLegend: View {
     }
 }
 
+private struct ConstellationD3WebView: UIViewRepresentable {
+    let nodes: [GraphNode]
+    let edges: [GraphEdge]
+    @Binding var selectedNodeID: String?
+    let resetToken: Int
+    let labelDensity: GraphLabelDensity
+    let onOpenNode: (String) -> Void
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+    
+    func makeUIView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        let userContent = WKUserContentController()
+        userContent.add(context.coordinator, name: "nodeTap")
+        userContent.add(context.coordinator, name: "nodeOpen")
+        config.userContentController = userContent
+        config.defaultWebpagePreferences.allowsContentJavaScript = true
+        
+        let webView = WKWebView(frame: .zero, configuration: config)
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+        webView.navigationDelegate = context.coordinator
+        context.coordinator.webView = webView
+        context.coordinator.pushBindings(selectedNodeID: $selectedNodeID, onOpenNode: onOpenNode)
+        
+        if let html = context.coordinator.initialHTML(payload: payload()) {
+            webView.loadHTMLString(html, baseURL: nil)
+        }
+        
+        return webView
+    }
+    
+    func updateUIView(_ uiView: WKWebView, context: Context) {
+        context.coordinator.pushBindings(selectedNodeID: $selectedNodeID, onOpenNode: onOpenNode)
+        context.coordinator.pushGraph(payload(), selectedNodeID: selectedNodeID, resetToken: resetToken)
+    }
+    
+    private func payload() -> D3GraphPayload {
+        D3GraphPayload(
+            nodes: nodes.map {
+                D3NodePayload(
+                    id: $0.id,
+                    title: $0.title,
+                    kind: $0.kind.d3Kind,
+                    color: $0.kind.webColor,
+                    icon: $0.kind.icon
+                )
+            },
+            links: edges.map {
+                D3LinkPayload(
+                    source: $0.fromID,
+                    target: $0.toID,
+                    weight: $0.weight
+                )
+            },
+            labelDensity: labelDensity.d3Token
+        )
+    }
+    
+    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+        weak var webView: WKWebView?
+        private var didFinishLoad = false
+        private var lastGraphJSON: String?
+        private var lastResetToken: Int = 0
+        private var setSelectedNode: (String?) -> Void = { _ in }
+        private var openNode: (String) -> Void = { _ in }
+        
+        func pushBindings(selectedNodeID: Binding<String?>, onOpenNode: @escaping (String) -> Void) {
+            self.setSelectedNode = { selectedNodeID.wrappedValue = $0 }
+            self.openNode = onOpenNode
+        }
+        
+        func initialHTML(payload: D3GraphPayload) -> String? {
+            guard let json = payload.jsonString else { return nil }
+            lastGraphJSON = json
+            return Self.htmlTemplate.replacingOccurrences(of: "__INITIAL_GRAPH_JSON__", with: json)
+        }
+        
+        func pushGraph(_ payload: D3GraphPayload, selectedNodeID: String?, resetToken: Int) {
+            guard didFinishLoad, let webView, let json = payload.jsonString else { return }
+            
+            if lastGraphJSON != json {
+                let updateJS = "window.__updateGraph(\(json));"
+                webView.evaluateJavaScript(updateJS)
+                lastGraphJSON = json
+            }
+            
+            if let selectedNodeID, let selectedLiteral = selectedNodeID.jsSingleQuoted {
+                webView.evaluateJavaScript("window.__selectNode(\(selectedLiteral));")
+            } else {
+                webView.evaluateJavaScript("window.__selectNode(null);")
+            }
+            
+            if resetToken != lastResetToken {
+                lastResetToken = resetToken
+                webView.evaluateJavaScript("window.__resetView();")
+            }
+        }
+        
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            didFinishLoad = true
+            if let json = lastGraphJSON {
+                webView.evaluateJavaScript("window.__updateGraph(\(json));")
+            }
+        }
+        
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard let id = message.body as? String else { return }
+            if message.name == "nodeTap" {
+                setSelectedNode(id)
+            } else if message.name == "nodeOpen" {
+                openNode(id)
+            }
+        }
+        
+        static let htmlTemplate = #"""
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <style>
+    html, body {
+      margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
+      background: radial-gradient(circle at 20% 15%, #142047 0%, #0a1233 38%, #050c24 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    }
+    #root { width: 100%; height: 100%; }
+    .link { stroke: rgba(210, 220, 255, 0.4); stroke-linecap: round; }
+    .node circle { stroke: rgba(255,255,255,0.2); stroke-width: 1.2px; }
+    .node text {
+      fill: rgba(242, 246, 255, 0.95);
+      font-size: 11px;
+      paint-order: stroke;
+      stroke: rgba(5, 12, 36, 0.95);
+      stroke-width: 3.2px;
+      stroke-linejoin: round;
+      pointer-events: none;
+    }
+    .node.selected circle { stroke: rgba(255,255,255,0.85); stroke-width: 2.5px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script>
+    const initialGraph = __INITIAL_GRAPH_JSON__;
+    let graph = initialGraph;
+    let selectedNodeId = null;
+    let zoomRef = null;
+    let svgRef = null;
+    let stageRef = null;
+    let simulation = null;
+    
+    function canShowLabel(node, density, neighbors) {
+      if (node.id === selectedNodeId) return true;
+      if (neighbors.has(node.id)) return true;
+      if (density === "high") return true;
+      if (density === "medium") return node.kind === "theme";
+      return false;
+    }
+    
+    function neighborSet(links, id) {
+      const result = new Set();
+      if (!id) return result;
+      for (const link of links) {
+        const a = typeof link.source === "object" ? link.source.id : link.source;
+        const b = typeof link.target === "object" ? link.target.id : link.target;
+        if (a === id) result.add(b);
+        if (b === id) result.add(a);
+      }
+      return result;
+    }
+    
+    function render() {
+      if (!window.d3) return;
+      
+      const root = document.getElementById("root");
+      const width = root.clientWidth || 320;
+      const height = root.clientHeight || 300;
+      root.innerHTML = "";
+      
+      svgRef = d3.select(root).append("svg")
+        .attr("width", width)
+        .attr("height", height);
+      
+      const stage = svgRef.append("g");
+      stageRef = stage;
+      
+      zoomRef = d3.zoom()
+        .scaleExtent([0.45, 3.5])
+        .on("zoom", (event) => stage.attr("transform", event.transform));
+      svgRef.call(zoomRef);
+      
+      const links = graph.links.map((d) => ({ ...d }));
+      const nodes = graph.nodes.map((d) => ({ ...d }));
+      const neighbors = neighborSet(links, selectedNodeId);
+      
+      const link = stage.append("g")
+        .selectAll("line")
+        .data(links)
+        .join("line")
+        .attr("class", "link")
+        .attr("stroke-width", (d) => Math.min(2.8, 1 + d.weight * 0.45))
+        .attr("stroke-opacity", (d) => {
+          if (!selectedNodeId) return 0.38;
+          const a = typeof d.source === "object" ? d.source.id : d.source;
+          const b = typeof d.target === "object" ? d.target.id : d.target;
+          return (a === selectedNodeId || b === selectedNodeId) ? 0.88 : 0.1;
+        });
+      
+      const node = stage.append("g")
+        .selectAll("g")
+        .data(nodes)
+        .join("g")
+        .attr("class", (d) => d.id === selectedNodeId ? "node selected" : "node")
+        .style("cursor", "pointer")
+        .on("click", (_, d) => {
+          selectedNodeId = d.id;
+          if (window.webkit?.messageHandlers?.nodeTap) {
+            window.webkit.messageHandlers.nodeTap.postMessage(d.id);
+          }
+          render();
+        })
+        .on("dblclick", (_, d) => {
+          if (window.webkit?.messageHandlers?.nodeOpen) {
+            window.webkit.messageHandlers.nodeOpen.postMessage(d.id);
+          }
+        });
+      
+      node.append("circle")
+        .attr("r", (d) => d.id === selectedNodeId ? 11.5 : 9.4)
+        .attr("fill", (d) => d.color)
+        .attr("fill-opacity", (d) => {
+          if (!selectedNodeId) return 0.95;
+          return (d.id === selectedNodeId || neighbors.has(d.id)) ? 0.98 : 0.32;
+        });
+      
+      node.append("text")
+        .attr("dy", -13)
+        .attr("text-anchor", "middle")
+        .style("display", (d) => canShowLabel(d, graph.labelDensity, neighbors) ? "block" : "none")
+        .text((d) => d.title);
+      
+      simulation = d3.forceSimulation(nodes)
+        .force("link", d3.forceLink(links).id((d) => d.id).distance((d) => 90 + (d.weight || 1) * 4))
+        .force("charge", d3.forceManyBody().strength(-260))
+        .force("center", d3.forceCenter(width / 2, height / 2))
+        .force("collision", d3.forceCollide().radius((d) => d.id === selectedNodeId ? 24 : 20))
+        .alpha(0.95)
+        .alphaDecay(0.028);
+      
+      node.call(
+        d3.drag()
+          .on("start", (event) => {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            event.subject.fx = event.subject.x;
+            event.subject.fy = event.subject.y;
+          })
+          .on("drag", (event) => {
+            event.subject.fx = event.x;
+            event.subject.fy = event.y;
+          })
+          .on("end", (event) => {
+            if (!event.active) simulation.alphaTarget(0);
+            event.subject.fx = null;
+            event.subject.fy = null;
+          })
+      );
+      
+      simulation.on("tick", () => {
+        link
+          .attr("x1", (d) => d.source.x)
+          .attr("y1", (d) => d.source.y)
+          .attr("x2", (d) => d.target.x)
+          .attr("y2", (d) => d.target.y);
+        
+        node.attr("transform", (d) => `translate(${d.x},${d.y})`);
+      });
+    }
+    
+    window.__updateGraph = function(nextGraph) {
+      graph = nextGraph;
+      render();
+    };
+    
+    window.__selectNode = function(id) {
+      selectedNodeId = id;
+      render();
+    };
+    
+    window.__resetView = function() {
+      if (svgRef && zoomRef) {
+        svgRef.transition().duration(360).call(zoomRef.transform, d3.zoomIdentity);
+      }
+      if (simulation) {
+        simulation.alpha(0.85).restart();
+      }
+    };
+    
+    if (window.d3) {
+      render();
+    } else {
+      const root = document.getElementById("root");
+      root.innerHTML = '<div style="color:#dbe7ff;opacity:0.9;padding:16px;font-size:13px;">Unable to load D3. Check network and reload the graph.</div>';
+    }
+  </script>
+</body>
+</html>
+"""#
+    }
+}
+
+private struct D3GraphPayload: Codable {
+    let nodes: [D3NodePayload]
+    let links: [D3LinkPayload]
+    let labelDensity: String
+    
+    var jsonString: String? {
+        let encoder = JSONEncoder()
+        guard let data = try? encoder.encode(self), let string = String(data: data, encoding: .utf8) else { return nil }
+        return string
+    }
+}
+
+private struct D3NodePayload: Codable {
+    let id: String
+    let title: String
+    let kind: String
+    let color: String
+    let icon: String
+}
+
+private struct D3LinkPayload: Codable {
+    let source: String
+    let target: String
+    let weight: Int
+}
+
 private struct GraphData {
     let nodes: [GraphNode]
     let edges: [GraphEdge]
@@ -1477,6 +1808,22 @@ private enum GraphNodeKind: Hashable {
         case .tvShow: return 1
         }
     }
+    
+    var webColor: String {
+        switch self {
+        case .movie: return "#3b82f6"
+        case .tvShow: return "#22c55e"
+        case .theme: return "#c026d3"
+        }
+    }
+    
+    var d3Kind: String {
+        switch self {
+        case .movie: return "movie"
+        case .tvShow: return "tvShow"
+        case .theme: return "theme"
+        }
+    }
 }
 
 private enum GraphFilter: CaseIterable {
@@ -1526,6 +1873,14 @@ private enum GraphLabelDensity: CaseIterable {
         case .low: return "Labels: Low"
         case .medium: return "Labels: Medium"
         case .high: return "Labels: High"
+        }
+    }
+    
+    var d3Token: String {
+        switch self {
+        case .low: return "low"
+        case .medium: return "medium"
+        case .high: return "high"
         }
     }
 }
@@ -1596,5 +1951,17 @@ private extension EnvironmentValues {
     var graphAnimationTime: TimeInterval {
         get { self[GraphAnimationTimeKey.self] }
         set { self[GraphAnimationTimeKey.self] = newValue }
+    }
+}
+
+private extension String {
+    var jsSingleQuoted: String? {
+        guard let data = try? JSONEncoder().encode(self), var json = String(data: data, encoding: .utf8) else { return nil }
+        if json.hasPrefix("\""), json.hasSuffix("\""), json.count >= 2 {
+            json.removeFirst()
+            json.removeLast()
+        }
+        let escaped = json.replacingOccurrences(of: "'", with: "\\'")
+        return "'\(escaped)'"
     }
 }
