@@ -1774,6 +1774,7 @@ private struct ConstellationD3WebView: UIViewRepresentable {
     let stageRef = null;
     let simulation = null;
     let lastTapAt = { time: 0, id: null };
+    let sparkTimer = null;
     
     function canShowLabel(node, density, neighbors) {
       if (node.id === selectedNodeId) return true;
@@ -1797,6 +1798,9 @@ private struct ConstellationD3WebView: UIViewRepresentable {
     
     function render() {
       if (!window.d3) return;
+      if (sparkTimer) {
+        sparkTimer.stop();
+      }
       
       const root = document.getElementById("root");
       const width = root.clientWidth || 320;
@@ -1906,35 +1910,7 @@ private struct ConstellationD3WebView: UIViewRepresentable {
         .alpha(0.95)
         .alphaDecay(0.028);
       
-      node.call(
-        d3.drag()
-          .on("start", (event) => {
-            if (!event.active) simulation.alphaTarget(0.3).restart();
-            event.subject.fx = event.subject.x;
-            event.subject.fy = event.subject.y;
-          })
-          .on("drag", (event) => {
-            event.subject.fx = event.x;
-            event.subject.fy = event.y;
-          })
-          .on("end", (event) => {
-            if (!event.active) simulation.alphaTarget(0);
-            event.subject.fx = null;
-            event.subject.fy = null;
-          })
-      );
-      
-      simulation.on("tick", () => {
-        const t = Date.now() / 1000;
-        
-        link
-          .attr("x1", (d) => d.source.x)
-          .attr("y1", (d) => d.source.y)
-          .attr("x2", (d) => d.target.x)
-          .attr("y2", (d) => d.target.y);
-        
-        node.attr("transform", (d) => `translate(${d.x},${d.y})`);
-        
+      function animateSparks(t) {
         sparkLayer
           .attr("cx", (s) => {
             const l = themeLinks[s.linkIndex];
@@ -1956,6 +1932,38 @@ private struct ConstellationD3WebView: UIViewRepresentable {
             const flicker = (Math.sin(t * 2.1 + s.phase * 11) + 1) * 0.5;
             return flicker > 0.73 ? 0.95 : 0;
           });
+      }
+      
+      node.call(
+        d3.drag()
+          .on("start", (event) => {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            event.subject.fx = event.subject.x;
+            event.subject.fy = event.subject.y;
+          })
+          .on("drag", (event) => {
+            event.subject.fx = event.x;
+            event.subject.fy = event.y;
+          })
+          .on("end", (event) => {
+            if (!event.active) simulation.alphaTarget(0);
+            event.subject.fx = null;
+            event.subject.fy = null;
+          })
+      );
+      
+      simulation.on("tick", () => {
+        link
+          .attr("x1", (d) => d.source.x)
+          .attr("y1", (d) => d.source.y)
+          .attr("x2", (d) => d.target.x)
+          .attr("y2", (d) => d.target.y);
+        
+        node.attr("transform", (d) => `translate(${d.x},${d.y})`);
+      });
+      
+      sparkTimer = d3.timer(() => {
+        animateSparks(Date.now() / 1000);
       });
     }
     
