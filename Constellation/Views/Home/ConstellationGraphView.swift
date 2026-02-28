@@ -1297,12 +1297,17 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
     let spinX = -0.45;
     let spinY = 0.32;
     let velocityX = 0.0;
-    let velocityY = 0.0022;
+    let velocityY = 0.0;
+    const baseAutoSpinY = 0.00075;
+    const idleResumeMs = 2200;
+    let autoSpin = true;
+    let lastInteractionAt = Date.now();
     let dragging = false;
     let lastX = 0;
     let lastY = 0;
     let hoverNodeId = null;
     let lastTap = { id: null, time: 0 };
+    let frontCaptionNodeId = null;
     
     const root = document.getElementById("root");
     const canvas = document.getElementById("canvas");
@@ -1386,6 +1391,15 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
         return { node, ...p };
       }).sort((a, b) => b.depth - a.depth);
       
+      frontCaptionNodeId = null;
+      let closestDepth = Number.POSITIVE_INFINITY;
+      for (const p of projected) {
+        if (p.depth < closestDepth) {
+          closestDepth = p.depth;
+          frontCaptionNodeId = p.node.id;
+        }
+      }
+      
       const pos = new Map(projected.map((p) => [p.node.id, p]));
       
       for (const link of state.links) {
@@ -1417,24 +1431,31 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
         ctx.strokeStyle = isSelected ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.45)";
         ctx.stroke();
         
-        if (isHover || isSelected) {
-          drawLabel(p.node.title, p.px + 11, p.py - 10);
+        const isFrontCaption = !hoverNodeId && !selectedNodeId && autoSpin && p.node.id === frontCaptionNodeId;
+        if (isHover || isSelected || isFrontCaption) {
+          drawLabel(p.node.title, p.px + 11, p.py - 10, isFrontCaption ? 0.78 : 1.0);
         }
       }
     }
     
-    function drawLabel(text, x, y) {
+    function drawLabel(text, x, y, alpha = 1.0) {
+      const a = Math.max(0.2, Math.min(1.0, alpha));
       ctx.font = "12px -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif";
       const w = Math.min(188, Math.max(52, ctx.measureText(text).width + 14));
       const h = 24;
-      ctx.fillStyle = "rgba(18, 24, 48, 0.86)";
+      ctx.fillStyle = `rgba(18, 24, 48, ${0.86 * a})`;
       roundRect(x, y - h, w, h, 10);
       ctx.fill();
-      ctx.strokeStyle = "rgba(210, 220, 255, 0.4)";
+      ctx.strokeStyle = `rgba(210, 220, 255, ${0.4 * a})`;
       ctx.lineWidth = 1;
       ctx.stroke();
-      ctx.fillStyle = "rgba(245, 248, 255, 0.97)";
+      ctx.fillStyle = `rgba(245, 248, 255, ${0.97 * a})`;
       ctx.fillText(text, x + 7, y - 8);
+    }
+
+    function markInteraction() {
+      lastInteractionAt = Date.now();
+      autoSpin = false;
     }
     
     function roundRect(x, y, w, h, r) {
@@ -1473,17 +1494,24 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
     }
     
     function tick() {
+      if (!dragging && !autoSpin && (Date.now() - lastInteractionAt) > idleResumeMs) {
+        autoSpin = true;
+      }
       if (!dragging) {
+        if (autoSpin) {
+          velocityY += baseAutoSpinY;
+        }
         spinX += velocityX;
         spinY += velocityY;
         velocityX *= 0.985;
-        velocityY *= 0.988;
+        velocityY *= autoSpin ? 0.992 : 0.965;
       }
       draw();
       requestAnimationFrame(tick);
     }
     
     canvas.addEventListener("mousedown", (e) => {
+      markInteraction();
       dragging = true;
       lastX = e.clientX;
       lastY = e.clientY;
@@ -1491,6 +1519,7 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
     window.addEventListener("mouseup", () => { dragging = false; });
     window.addEventListener("mousemove", (e) => {
       if (dragging) {
+        markInteraction();
         const dx = e.clientX - lastX;
         const dy = e.clientY - lastY;
         spinY += dx * 0.006;
@@ -1505,6 +1534,7 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
     });
     
     canvas.addEventListener("touchstart", (e) => {
+      markInteraction();
       const t = e.touches[0];
       dragging = true;
       lastX = t.clientX;
@@ -1512,6 +1542,7 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
     }, { passive: true });
     
     canvas.addEventListener("touchmove", (e) => {
+      markInteraction();
       const t = e.touches[0];
       const dx = t.clientX - lastX;
       const dy = t.clientY - lastY;
@@ -1529,6 +1560,7 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
     }, { passive: true });
     
     canvas.addEventListener("click", (e) => {
+      markInteraction();
       const id = pickNode(e.clientX, e.clientY);
       if (!id) return;
       selectedNodeId = id;
@@ -1557,9 +1589,12 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
       spinX = -0.45;
       spinY = 0.32;
       velocityX = 0.0;
-      velocityY = 0.0022;
+      velocityY = 0.0;
       hoverNodeId = null;
+      frontCaptionNodeId = null;
       selectedNodeId = null;
+      autoSpin = true;
+      lastInteractionAt = Date.now();
     };
     
     window.addEventListener("resize", resize);
@@ -1727,6 +1762,7 @@ private struct ConstellationD3WebView: UIViewRepresentable {
     let svgRef = null;
     let stageRef = null;
     let simulation = null;
+    let lastTapAt = { time: 0, id: null };
     
     function canShowLabel(node, density, neighbors) {
       if (node.id === selectedNodeId) return true;
@@ -1785,8 +1821,6 @@ private struct ConstellationD3WebView: UIViewRepresentable {
           return (a === selectedNodeId || b === selectedNodeId) ? 0.88 : 0.1;
         });
       
-      let lastTapAt = { time: 0, id: null };
-      
       const node = stage.append("g")
         .selectAll("g")
         .data(nodes)
@@ -1809,6 +1843,12 @@ private struct ConstellationD3WebView: UIViewRepresentable {
           }
           
           render();
+        })
+        .on("dblclick", (event, d) => {
+          event.preventDefault();
+          if (window.webkit?.messageHandlers?.nodeOpen) {
+            window.webkit.messageHandlers.nodeOpen.postMessage(d.id);
+          }
         });
       
       node.append("circle")
