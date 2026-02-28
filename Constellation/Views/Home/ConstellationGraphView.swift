@@ -1041,7 +1041,8 @@ private struct GraphNodesLayer: View {
     let focusNodeIDs: Set<String>?
     
     var body: some View {
-        let inlineLabels = buildInlineLabels()
+        let avoidPoints = selectedPlacementContext()
+        let inlineLabels = buildInlineLabels(avoiding: avoidPoints)
         
         ZStack {
             ForEach(nodes) { node in
@@ -1064,13 +1065,9 @@ private struct GraphNodesLayer: View {
             if let selectedNodeID,
                let selectedNode = nodes.first(where: { $0.id == selectedNodeID }),
                let selectedPosition = positions[selectedNodeID] {
+                let selectedLabelPoint = preferredSelectedLabelPoint(for: selectedPosition)
                 SelectedNodeLabel(node: selectedNode)
-                    .position(
-                        CGPoint(
-                            x: point(for: selectedPosition, in: size).x,
-                            y: point(for: selectedPosition, in: size).y - 24
-                        )
-                    )
+                    .position(selectedLabelPoint)
             }
         }
     }
@@ -1097,7 +1094,7 @@ private struct GraphNodesLayer: View {
         )
     }
     
-    private func buildInlineLabels() -> [InlineLabelPlacement] {
+    private func buildInlineLabels(avoiding avoidPoints: [CGPoint]) -> [InlineLabelPlacement] {
         let candidates = nodes
             .filter { node in
                 if selectedNodeID == node.id { return false }
@@ -1120,7 +1117,8 @@ private struct GraphNodesLayer: View {
             guard let p = positions[node.id] else { continue }
             let proposed = labelPoint(for: p)
             let overlaps = result.contains { distance($0.position, proposed) < minSpacing }
-            if overlaps { continue }
+            let blockedBySelection = avoidPoints.contains { distance($0, proposed) < 72 }
+            if overlaps || blockedBySelection { continue }
             
             result.append(
                 InlineLabelPlacement(
@@ -1146,6 +1144,28 @@ private struct GraphNodesLayer: View {
     private func nodeOpacity(_ nodeID: String) -> Double {
         guard let focusNodeIDs else { return 1.0 }
         return focusNodeIDs.contains(nodeID) ? 1.0 : 0.22
+    }
+
+    private func preferredSelectedLabelPoint(for normalized: CGPoint) -> CGPoint {
+        let base = point(for: normalized, in: size)
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        let dx = base.x - center.x
+        let dy = base.y - center.y
+        let length = max(0.001, sqrt(dx * dx + dy * dy))
+        let outward: CGFloat = 52
+        return CGPoint(
+            x: base.x + (dx / length) * outward,
+            y: base.y + (dy / length) * outward
+        )
+    }
+
+    private func selectedPlacementContext() -> [CGPoint] {
+        guard let selectedNodeID, let selectedNormalized = positions[selectedNodeID] else {
+            return []
+        }
+        let bubblePoint = point(for: selectedNormalized, in: size)
+        let labelPoint = preferredSelectedLabelPoint(for: selectedNormalized)
+        return [bubblePoint, labelPoint]
     }
 }
 
