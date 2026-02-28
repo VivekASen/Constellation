@@ -1298,7 +1298,7 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
     let spinY = 0.32;
     let velocityX = 0.0;
     let velocityY = 0.0;
-    const baseAutoSpinY = 0.00034;
+    const baseAutoSpinY = 0.0008;
     const idleResumeMs = 2600;
     let autoSpin = true;
     let lastInteractionAt = Date.now();
@@ -1307,7 +1307,7 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
     let lastY = 0;
     let hoverNodeId = null;
     let lastTap = { id: null, time: 0 };
-    let frontCaptionNodeId = null;
+    let frontCaptionNodeIds = [];
     
     const root = document.getElementById("root");
     const canvas = document.getElementById("canvas");
@@ -1391,12 +1391,21 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
         return { node, ...p };
       }).sort((a, b) => b.depth - a.depth);
       
-      frontCaptionNodeId = null;
-      let closestDepth = Number.POSITIVE_INFINITY;
-      for (const p of projected) {
-        if (p.depth < closestDepth) {
-          closestDepth = p.depth;
-          frontCaptionNodeId = p.node.id;
+      frontCaptionNodeIds.length = 0;
+      const frontCandidates = projected
+        .slice()
+        .sort((a, b) => a.depth - b.depth)
+        .slice(0, 8);
+      const minLabelDistance = 56;
+      for (const c of frontCandidates) {
+        if (frontCaptionNodeIds.length >= 3) break;
+        const tooClose = frontCaptionNodeIds.some((picked) => {
+          const dx = picked.px - c.px;
+          const dy = picked.py - c.py;
+          return Math.hypot(dx, dy) < minLabelDistance;
+        });
+        if (!tooClose) {
+          frontCaptionNodeIds.push(c);
         }
       }
       
@@ -1431,7 +1440,7 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
         ctx.strokeStyle = isSelected ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.45)";
         ctx.stroke();
         
-        const isFrontCaption = !hoverNodeId && !selectedNodeId && autoSpin && p.node.id === frontCaptionNodeId;
+        const isFrontCaption = !hoverNodeId && !selectedNodeId && autoSpin && frontCaptionNodeIds.some((n) => n.node.id === p.node.id);
         if (isHover || isSelected || isFrontCaption) {
           drawLabel(p.node.title, p.px + 11, p.py - 10, isFrontCaption ? 0.92 : 1.0);
         }
@@ -1593,7 +1602,7 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
       velocityX = 0.0;
       velocityY = 0.0;
       hoverNodeId = null;
-      frontCaptionNodeId = null;
+      frontCaptionNodeIds.length = 0;
       selectedNodeId = null;
       autoSpin = true;
       lastInteractionAt = Date.now();
