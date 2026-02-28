@@ -1298,7 +1298,7 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
     let spinY = 0.32;
     let velocityX = 0.0;
     let velocityY = 0.0;
-    const baseAutoSpinY = 0.00012;
+    const baseAutoSpinY = 0.00034;
     const idleResumeMs = 2600;
     let autoSpin = true;
     let lastInteractionAt = Date.now();
