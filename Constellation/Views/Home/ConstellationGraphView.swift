@@ -22,6 +22,7 @@ struct ConstellationGraphView: View {
     @State private var densityMode: GraphDensityMode = .simple
     @State private var panStart: CGSize = .zero
     @State private var zoomStart: CGFloat = 1.0
+    @State private var canvasSize: CGSize = .zero
     
     @State private var selectedMovie: Movie?
     @State private var selectedTVShow: TVShow?
@@ -38,7 +39,15 @@ struct ConstellationGraphView: View {
         let visibleNodes = graph.nodes.filter { visibleKinds.contains($0.kind) }
         let visibleNodeIDs = Set(visibleNodes.map(\.id))
         let allVisibleEdges = graph.edges.filter { visibleNodeIDs.contains($0.fromID) && visibleNodeIDs.contains($0.toID) }
+        let focusNodeIDs = focusNodeSet(selectedID: selectedNodeID, edges: allVisibleEdges)
+        let renderedEdges = focusNodeIDs == nil
+            ? allVisibleEdges
+            : allVisibleEdges.filter { edge in
+                focusNodeIDs!.contains(edge.fromID) && focusNodeIDs!.contains(edge.toID)
+            }
+        let renderedNodes = visibleNodes
         let visibleEdges = densityMode == .simple ? Array(allVisibleEdges.prefix(70)) : allVisibleEdges
+        let displayEdges = densityMode == .simple ? Array(renderedEdges.prefix(70)) : renderedEdges
         
         let showDenseLabels = densityMode == .detailed || selectedTheme != nil || selectedCollection != nil
         
@@ -138,16 +147,21 @@ struct ConstellationGraphView: View {
                     
                     graphLayer(
                         size: proxy.size,
-                        nodes: visibleNodes,
-                        edges: visibleEdges,
+                        nodes: renderedNodes,
+                        edges: displayEdges,
                         positions: graph.positions,
                         animated: false,
-                        showDenseLabels: showDenseLabels
+                        showDenseLabels: showDenseLabels,
+                        focusNodeIDs: focusNodeIDs
                     )
                     .scaleEffect(zoom)
                     .offset(pan)
                     .contentShape(Rectangle())
                     .gesture(graphGesture(maxZoom: 2.2))
+                    .onAppear { canvasSize = proxy.size }
+                    .onChange(of: proxy.size) { _, newValue in
+                        canvasSize = newValue
+                    }
                     
                     if visibleNodes.isEmpty {
                         ContentUnavailableView(
@@ -197,6 +211,16 @@ struct ConstellationGraphView: View {
         .onChange(of: selectedCollectionFilter) { _, _ in resetViewport() }
         .onChange(of: filter) { _, _ in resetViewport() }
         .onChange(of: densityMode) { _, _ in resetViewport() }
+        .onChange(of: selectedNodeID) { _, newValue in
+            guard let newValue else { return }
+            focusOnNode(
+                nodeID: newValue,
+                positions: graph.positions,
+                canvasSize: canvasSize,
+                targetZoom: 1.35,
+                maxZoom: 2.2
+            )
+        }
     }
     
     @ViewBuilder
@@ -206,15 +230,23 @@ struct ConstellationGraphView: View {
         edges: [GraphEdge],
         positions: [String: CGPoint],
         animated: Bool,
-        showDenseLabels: Bool
+        showDenseLabels: Bool,
+        focusNodeIDs: Set<String>?
     ) -> some View {
-        let edgeView = GraphEdgesLayer(edges: edges, size: size, positions: positions, animated: animated)
+        let edgeView = GraphEdgesLayer(
+            edges: edges,
+            size: size,
+            positions: positions,
+            animated: animated,
+            focusNodeIDs: focusNodeIDs
+        )
         let nodeView = GraphNodesLayer(
             nodes: nodes,
             size: size,
             positions: positions,
             selectedNodeID: $selectedNodeID,
-            showDenseLabels: showDenseLabels
+            showDenseLabels: showDenseLabels,
+            focusNodeIDs: focusNodeIDs
         )
         
         if animated {
@@ -434,7 +466,52 @@ struct ConstellationGraphView: View {
             pan = .zero
             zoomStart = 1.0
             panStart = .zero
+            selectedNodeID = nil
         }
+    }
+
+    private func focusNodeSet(selectedID: String?, edges: [GraphEdge]) -> Set<String>? {
+        guard let selectedID else { return nil }
+        var neighbors: Set<String> = [selectedID]
+        for edge in edges {
+            if edge.fromID == selectedID {
+                neighbors.insert(edge.toID)
+            } else if edge.toID == selectedID {
+                neighbors.insert(edge.fromID)
+            }
+        }
+        return neighbors.count > 1 ? neighbors : nil
+    }
+
+    private func focusOnNode(
+        nodeID: String,
+        positions: [String: CGPoint],
+        canvasSize: CGSize,
+        targetZoom: CGFloat,
+        maxZoom: CGFloat
+    ) {
+        guard canvasSize.width > 0, canvasSize.height > 0, let normalized = positions[nodeID] else { return }
+        let zoomValue = min(max(targetZoom, 0.65), maxZoom)
+        let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
+        let point = graphPoint(for: normalized, in: canvasSize)
+        let focusedPan = CGSize(
+            width: -((point.x - center.x) * zoomValue),
+            height: -((point.y - center.y) * zoomValue)
+        )
+        withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
+            zoom = zoomValue
+            pan = focusedPan
+            zoomStart = zoomValue
+            panStart = focusedPan
+        }
+    }
+
+    private func graphPoint(for normalized: CGPoint, in size: CGSize) -> CGPoint {
+        let minSide = min(size.width, size.height)
+        return CGPoint(
+            x: size.width / 2 + normalized.x * minSide * 0.46,
+            y: size.height / 2 + normalized.y * minSide * 0.46
+        )
     }
     
     private func ringPosition(index: Int, total: Int, radius: CGFloat, phase: CGFloat) -> CGPoint {
@@ -627,6 +704,7 @@ private struct ImmersiveConstellationView: View {
     @State private var pan: CGSize = .zero
     @State private var panStart: CGSize = .zero
     @State private var zoomStart: CGFloat = 1.0
+    @State private var canvasSize: CGSize = .zero
     
     private var visibleNodes: [GraphNode] {
         let kinds = filter.visibleKinds
@@ -636,6 +714,24 @@ private struct ImmersiveConstellationView: View {
     private var visibleEdges: [GraphEdge] {
         let ids = Set(visibleNodes.map(\.id))
         return graph.edges.filter { ids.contains($0.fromID) && ids.contains($0.toID) }
+    }
+
+    private var focusNodeIDs: Set<String>? {
+        guard let selectedNodeID else { return nil }
+        var neighbors: Set<String> = [selectedNodeID]
+        for edge in visibleEdges {
+            if edge.fromID == selectedNodeID {
+                neighbors.insert(edge.toID)
+            } else if edge.toID == selectedNodeID {
+                neighbors.insert(edge.fromID)
+            }
+        }
+        return neighbors.count > 1 ? neighbors : nil
+    }
+
+    private var displayEdges: [GraphEdge] {
+        guard let focusNodeIDs else { return visibleEdges }
+        return visibleEdges.filter { focusNodeIDs.contains($0.fromID) && focusNodeIDs.contains($0.toID) }
     }
     
     var body: some View {
@@ -701,20 +797,31 @@ private struct ImmersiveConstellationView: View {
                 GeometryReader { proxy in
                     TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
                         ZStack {
-                            GraphEdgesLayer(edges: visibleEdges, size: proxy.size, positions: graph.positions, animated: true)
+                            GraphEdgesLayer(
+                                edges: displayEdges,
+                                size: proxy.size,
+                                positions: graph.positions,
+                                animated: true,
+                                focusNodeIDs: focusNodeIDs
+                            )
                                 .environment(\.graphAnimationTime, timeline.date.timeIntervalSinceReferenceDate)
                             GraphNodesLayer(
                                 nodes: visibleNodes,
                                 size: proxy.size,
                                 positions: graph.positions,
                                 selectedNodeID: $selectedNodeID,
-                                showDenseLabels: showDenseLabels
+                                showDenseLabels: showDenseLabels,
+                                focusNodeIDs: focusNodeIDs
                             )
                         }
                         .scaleEffect(zoom)
                         .offset(pan)
                         .contentShape(Rectangle())
                         .gesture(graphGesture(maxZoom: 2.5))
+                        .onAppear { canvasSize = proxy.size }
+                        .onChange(of: proxy.size) { _, newValue in
+                            canvasSize = newValue
+                        }
                     }
                 }
                 .padding(.top, 8)
@@ -722,6 +829,10 @@ private struct ImmersiveConstellationView: View {
             }
         }
         .foregroundStyle(.white)
+        .onChange(of: selectedNodeID) { _, newValue in
+            guard let newValue else { return }
+            focusOnNode(nodeID: newValue, targetZoom: 1.55, maxZoom: 2.5)
+        }
     }
     
     private func graphGesture(maxZoom: CGFloat) -> some Gesture {
@@ -752,7 +863,33 @@ private struct ImmersiveConstellationView: View {
             pan = .zero
             zoomStart = 1.0
             panStart = .zero
+            selectedNodeID = nil
         }
+    }
+
+    private func focusOnNode(nodeID: String, targetZoom: CGFloat, maxZoom: CGFloat) {
+        guard canvasSize.width > 0, canvasSize.height > 0, let normalized = graph.positions[nodeID] else { return }
+        let zoomValue = min(max(targetZoom, 0.65), maxZoom)
+        let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
+        let point = graphPoint(for: normalized, in: canvasSize)
+        let focusedPan = CGSize(
+            width: -((point.x - center.x) * zoomValue),
+            height: -((point.y - center.y) * zoomValue)
+        )
+        withAnimation(.spring(response: 0.6, dampingFraction: 0.83)) {
+            zoom = zoomValue
+            pan = focusedPan
+            zoomStart = zoomValue
+            panStart = focusedPan
+        }
+    }
+
+    private func graphPoint(for normalized: CGPoint, in size: CGSize) -> CGPoint {
+        let minSide = min(size.width, size.height)
+        return CGPoint(
+            x: size.width / 2 + normalized.x * minSide * 0.46,
+            y: size.height / 2 + normalized.y * minSide * 0.46
+        )
     }
 }
 
@@ -789,6 +926,7 @@ private struct GraphEdgesLayer: View {
     let size: CGSize
     let positions: [String: CGPoint]
     let animated: Bool
+    let focusNodeIDs: Set<String>?
     
     @Environment(\.graphAnimationTime) private var animationTime
     
@@ -803,8 +941,11 @@ private struct GraphEdgesLayer: View {
                         path.addLine(to: toPoint)
                     }
                     
+                    let isFocused = focusNodeIDs?.contains(edge.fromID) == true && focusNodeIDs?.contains(edge.toID) == true
+                    let baseOpacity: Double = focusNodeIDs == nil ? edge.opacity : (isFocused ? min(0.95, edge.opacity + 0.35) : 0.05)
+                    let lineWidth: CGFloat = focusNodeIDs == nil ? edge.width : (isFocused ? edge.width + 0.8 : 0.6)
                     line
-                        .stroke(edge.baseColor.opacity(edge.opacity), lineWidth: edge.width)
+                        .stroke(edge.baseColor.opacity(baseOpacity), lineWidth: lineWidth)
                     
                     if animated && edge.source.containsCollection {
                         let dashPhase = animationTime.remainder(dividingBy: 4) * 22
@@ -834,6 +975,7 @@ private struct GraphNodesLayer: View {
     let positions: [String: CGPoint]
     @Binding var selectedNodeID: String?
     let showDenseLabels: Bool
+    let focusNodeIDs: Set<String>?
     
     var body: some View {
         let inlineLabels = buildInlineLabels()
@@ -842,6 +984,7 @@ private struct GraphNodesLayer: View {
             ForEach(nodes) { node in
                 if let position = positions[node.id] {
                     GraphNodeBubble(node: node, isSelected: selectedNodeID == node.id)
+                        .opacity(nodeOpacity(node.id))
                         .position(point(for: position, in: size))
                         .onTapGesture {
                             selectedNodeID = node.id
@@ -895,6 +1038,7 @@ private struct GraphNodesLayer: View {
         let candidates = nodes
             .filter { node in
                 if selectedNodeID == node.id { return false }
+                if let focusNodeIDs, !focusNodeIDs.contains(node.id) { return false }
                 if node.kind == .theme { return true }
                 return showDenseLabels
             }
@@ -934,6 +1078,11 @@ private struct GraphNodesLayer: View {
         let dx = a.x - b.x
         let dy = a.y - b.y
         return sqrt(dx * dx + dy * dy)
+    }
+
+    private func nodeOpacity(_ nodeID: String) -> Double {
+        guard let focusNodeIDs else { return 1.0 }
+        return focusNodeIDs.contains(nodeID) ? 1.0 : 0.22
     }
 }
 
