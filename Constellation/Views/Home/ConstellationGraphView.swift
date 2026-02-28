@@ -36,7 +36,6 @@ struct ConstellationGraphView: View {
         let collectionOptions = collections.sorted { $0.name < $1.name }
         let selectedTheme = selectedThemeFilter == GraphFilterToken.all ? nil : selectedThemeFilter
         let selectedCollection = selectedCollectionFilter == GraphFilterToken.all ? nil : selectedCollectionFilter
-        
         let graph = buildGraph(themeFilter: selectedTheme, collectionFilter: selectedCollection, densityMode: densityMode)
         let filteredGraph = applyGraphFilter(nodes: graph.nodes, edges: graph.edges, filter: filter)
         let visibleNodes = filteredGraph.nodes
@@ -49,8 +48,6 @@ struct ConstellationGraphView: View {
             }
         let renderedNodes = visibleNodes
         let displayEdges = densityMode == .simple ? Array(renderedEdges.prefix(70)) : renderedEdges
-        
-        let showDenseLabels = densityMode == .detailed || selectedTheme != nil || selectedCollection != nil
         
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
@@ -80,72 +77,16 @@ struct ConstellationGraphView: View {
                 }
             }
             
-            HStack(spacing: 8) {
-                ForEach(GraphFilter.allCases, id: \.self) { option in
-                    Button(option.title) {
-                        filter = option
-                    }
+            HStack {
+                Text("Use immersive mode for filters and deep exploration.")
                     .font(.caption)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(filter == option ? Color.blue.opacity(0.2) : Color.gray.opacity(0.14))
-                    .foregroundStyle(filter == option ? .blue : .secondary)
-                    .clipShape(Capsule())
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Open Full Constellation") {
+                    showImmersiveMode = true
                 }
-            }
-            
-            Picker("Density", selection: $densityMode) {
-                ForEach(GraphDensityMode.allCases, id: \.self) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            
-            Picker("Labels", selection: $labelDensity) {
-                ForEach(GraphLabelDensity.allCases, id: \.self) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            
-            HStack(spacing: 8) {
-                Menu {
-                    Picker("Theme", selection: $selectedThemeFilter) {
-                        Text("All Themes").tag(GraphFilterToken.all)
-                        ForEach(themeOptions, id: \.self) { theme in
-                            Text(theme.replacingOccurrences(of: "-", with: " ").capitalized).tag(theme)
-                        }
-                    }
-                } label: {
-                    Label(
-                        selectedTheme == nil ? "Theme: All" : "Theme: \(selectedTheme!.replacingOccurrences(of: "-", with: " ").capitalized)",
-                        systemImage: "line.3.horizontal.decrease.circle"
-                    )
-                    .font(.caption)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.gray.opacity(0.14))
-                    .clipShape(Capsule())
-                }
-                
-                Menu {
-                    Picker("Collection", selection: $selectedCollectionFilter) {
-                        Text("All Collections").tag(GraphFilterToken.all)
-                        ForEach(collectionOptions, id: \.id) { collection in
-                            Text(collection.name).tag(collection.id.uuidString)
-                        }
-                    }
-                } label: {
-                    Label(
-                        selectedCollection == nil ? "Collection: All" : "Collection: 1 selected",
-                        systemImage: "square.stack.3d.up"
-                    )
-                    .font(.caption)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.gray.opacity(0.14))
-                    .clipShape(Capsule())
-                }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.bordered)
             }
             
             GeometryReader { proxy in
@@ -202,9 +143,13 @@ struct ConstellationGraphView: View {
         .fullScreenCover(isPresented: $showImmersiveMode) {
             ImmersiveConstellationView(
                 graph: graph,
-                filter: filter,
-                showDenseLabels: showDenseLabels,
-                labelDensity: labelDensity,
+                filter: $filter,
+                labelDensity: $labelDensity,
+                densityMode: $densityMode,
+                selectedThemeFilter: $selectedThemeFilter,
+                selectedCollectionFilter: $selectedCollectionFilter,
+                themeOptions: themeOptions,
+                collectionOptions: collectionOptions,
                 onClose: { showImmersiveMode = false },
                 onOpenNode: { node in
                     showImmersiveMode = false
@@ -764,18 +709,18 @@ private struct BrainPortalButton: View {
 
 private struct ImmersiveConstellationView: View {
     let graph: GraphData
-    let filter: GraphFilter
-    let showDenseLabels: Bool
-    let labelDensity: GraphLabelDensity
+    @Binding var filter: GraphFilter
+    @Binding var labelDensity: GraphLabelDensity
+    @Binding var densityMode: GraphDensityMode
+    @Binding var selectedThemeFilter: String
+    @Binding var selectedCollectionFilter: String
+    let themeOptions: [String]
+    let collectionOptions: [ItemCollection]
     let onClose: () -> Void
     let onOpenNode: (GraphNode) -> Void
     
     @State private var selectedNodeID: String?
-    @State private var zoom: CGFloat = 1.0
-    @State private var pan: CGSize = .zero
-    @State private var panStart: CGSize = .zero
-    @State private var zoomStart: CGFloat = 1.0
-    @State private var canvasSize: CGSize = .zero
+    @State private var webResetToken: Int = 0
     
     private var visibleNodes: [GraphNode] {
         applyGraphFilter(nodes: graph.nodes, edges: graph.edges, filter: filter).nodes
@@ -784,26 +729,11 @@ private struct ImmersiveConstellationView: View {
     private var visibleEdges: [GraphEdge] {
         applyGraphFilter(nodes: graph.nodes, edges: graph.edges, filter: filter).edges
     }
-
-    private var focusNodeIDs: Set<String>? {
-        guard let selectedNodeID else { return nil }
-        var neighbors: Set<String> = [selectedNodeID]
-        for edge in visibleEdges {
-            if edge.fromID == selectedNodeID {
-                neighbors.insert(edge.toID)
-            } else if edge.toID == selectedNodeID {
-                neighbors.insert(edge.fromID)
-            }
-        }
-        return neighbors.count > 1 ? neighbors : nil
-    }
-
-    private var displayEdges: [GraphEdge] {
-        guard let focusNodeIDs else { return visibleEdges }
-        return visibleEdges.filter { focusNodeIDs.contains($0.fromID) && focusNodeIDs.contains($0.toID) }
-    }
     
     var body: some View {
+        let selectedTheme = selectedThemeFilter == GraphFilterToken.all ? nil : selectedThemeFilter
+        let selectedCollection = selectedCollectionFilter == GraphFilterToken.all ? nil : selectedCollectionFilter
+        
         ZStack {
             LinearGradient(
                 colors: [Color(red: 0.03, green: 0.05, blue: 0.12), Color(red: 0.04, green: 0.01, blue: 0.18), Color.black],
@@ -863,103 +793,112 @@ private struct ImmersiveConstellationView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
                 
-                GeometryReader { proxy in
-                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
-                        ZStack {
-                            GraphEdgesLayer(
-                                edges: displayEdges,
-                                size: proxy.size,
-                                positions: graph.positions,
-                                animated: true,
-                                focusNodeIDs: focusNodeIDs
-                            )
-                                .environment(\.graphAnimationTime, timeline.date.timeIntervalSinceReferenceDate)
-                            GraphNodesLayer(
-                                nodes: visibleNodes,
-                                size: proxy.size,
-                                positions: graph.positions,
-                                selectedNodeID: $selectedNodeID,
-                                showDenseLabels: showDenseLabels,
-                                focusNodeIDs: focusNodeIDs,
-                                labelDensity: labelDensity
-                            )
-                        }
-                        .scaleEffect(zoom)
-                        .offset(pan)
-                        .contentShape(Rectangle())
-                        .gesture(graphGesture(maxZoom: 2.5))
-                        .onAppear { canvasSize = proxy.size }
-                        .onChange(of: proxy.size) { _, newValue in
-                            canvasSize = newValue
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(GraphFilter.allCases, id: \.self) { option in
+                            Button(option.title) {
+                                filter = option
+                                selectedNodeID = nil
+                            }
+                            .font(.caption)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(filter == option ? Color.cyan.opacity(0.25) : Color.white.opacity(0.14))
+                            .foregroundStyle(.white)
+                            .clipShape(Capsule())
                         }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                }
+                
+                Picker("Density", selection: $densityMode) {
+                    ForEach(GraphDensityMode.allCases, id: \.self) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                
+                Picker("Labels", selection: $labelDensity) {
+                    ForEach(GraphLabelDensity.allCases, id: \.self) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                
+                HStack(spacing: 8) {
+                    Menu {
+                        Picker("Theme", selection: $selectedThemeFilter) {
+                            Text("All Themes").tag(GraphFilterToken.all)
+                            ForEach(themeOptions, id: \.self) { theme in
+                                Text(theme.replacingOccurrences(of: "-", with: " ").capitalized).tag(theme)
+                            }
+                        }
+                    } label: {
+                        Label(
+                            selectedTheme == nil ? "Theme: All" : "Theme: \(selectedTheme!.replacingOccurrences(of: "-", with: " ").capitalized)",
+                            systemImage: "line.3.horizontal.decrease.circle"
+                        )
+                        .font(.caption)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.14))
+                        .foregroundStyle(.white)
+                        .clipShape(Capsule())
+                    }
+                    
+                    Menu {
+                        Picker("Collection", selection: $selectedCollectionFilter) {
+                            Text("All Collections").tag(GraphFilterToken.all)
+                            ForEach(collectionOptions, id: \.id) { collection in
+                                Text(collection.name).tag(collection.id.uuidString)
+                            }
+                        }
+                    } label: {
+                        Label(
+                            selectedCollection == nil ? "Collection: All" : "Collection: 1 selected",
+                            systemImage: "square.stack.3d.up"
+                        )
+                        .font(.caption)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.14))
+                        .foregroundStyle(.white)
+                        .clipShape(Capsule())
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                
+                GeometryReader { _ in
+                    ConstellationD3WebView(
+                        nodes: visibleNodes,
+                        edges: visibleEdges,
+                        selectedNodeID: $selectedNodeID,
+                        resetToken: webResetToken,
+                        labelDensity: labelDensity,
+                        onOpenNode: { nodeID in
+                            guard let node = visibleNodes.first(where: { $0.id == nodeID }) else { return }
+                            onOpenNode(node)
+                        }
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .padding(.horizontal, 16)
                 }
                 .padding(.top, 8)
                 .padding(.bottom, 20)
             }
         }
         .foregroundStyle(.white)
-        .onChange(of: selectedNodeID) { _, newValue in
-            guard let newValue else { return }
-            focusOnNode(nodeID: newValue, targetZoom: 1.55, maxZoom: 2.5)
-        }
-    }
-    
-    private func graphGesture(maxZoom: CGFloat) -> some Gesture {
-        SimultaneousGesture(
-            DragGesture()
-                .onChanged { value in
-                    pan = CGSize(
-                        width: panStart.width + value.translation.width,
-                        height: panStart.height + value.translation.height
-                    )
-                }
-                .onEnded { _ in
-                    panStart = pan
-                },
-            MagnificationGesture()
-                .onChanged { value in
-                    zoom = min(max(zoomStart * value, 0.65), maxZoom)
-                }
-                .onEnded { _ in
-                    zoomStart = zoom
-                }
-        )
     }
     
     private func resetViewport() {
-        withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
-            zoom = 1.0
-            pan = .zero
-            zoomStart = 1.0
-            panStart = .zero
-            selectedNodeID = nil
-        }
-    }
-
-    private func focusOnNode(nodeID: String, targetZoom: CGFloat, maxZoom: CGFloat) {
-        guard canvasSize.width > 0, canvasSize.height > 0, let normalized = graph.positions[nodeID] else { return }
-        let zoomValue = min(max(targetZoom, 0.65), maxZoom)
-        let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
-        let point = graphPoint(for: normalized, in: canvasSize)
-        let focusedPan = CGSize(
-            width: -((point.x - center.x) * zoomValue),
-            height: -((point.y - center.y) * zoomValue)
-        )
-        withAnimation(.spring(response: 0.6, dampingFraction: 0.83)) {
-            zoom = zoomValue
-            pan = focusedPan
-            zoomStart = zoomValue
-            panStart = focusedPan
-        }
-    }
-
-    private func graphPoint(for normalized: CGPoint, in size: CGSize) -> CGPoint {
-        let minSide = min(size.width, size.height)
-        return CGPoint(
-            x: size.width / 2 + normalized.x * minSide * 0.46,
-            y: size.height / 2 + normalized.y * minSide * 0.46
-        )
+        selectedNodeID = nil
+        webResetToken += 1
     }
 }
 
@@ -1559,6 +1498,8 @@ private struct ConstellationD3WebView: UIViewRepresentable {
           return (a === selectedNodeId || b === selectedNodeId) ? 0.88 : 0.1;
         });
       
+      let lastTapAt = { time: 0, id: null };
+      
       const node = stage.append("g")
         .selectAll("g")
         .data(nodes)
@@ -1566,16 +1507,21 @@ private struct ConstellationD3WebView: UIViewRepresentable {
         .attr("class", (d) => d.id === selectedNodeId ? "node selected" : "node")
         .style("cursor", "pointer")
         .on("click", (_, d) => {
+          const now = Date.now();
+          const isDoubleTap = lastTapAt.id === d.id && (now - lastTapAt.time) < 320;
+          lastTapAt.time = now;
+          lastTapAt.id = d.id;
+          
           selectedNodeId = d.id;
           if (window.webkit?.messageHandlers?.nodeTap) {
             window.webkit.messageHandlers.nodeTap.postMessage(d.id);
           }
-          render();
-        })
-        .on("dblclick", (_, d) => {
-          if (window.webkit?.messageHandlers?.nodeOpen) {
+          
+          if (isDoubleTap && window.webkit?.messageHandlers?.nodeOpen) {
             window.webkit.messageHandlers.nodeOpen.postMessage(d.id);
           }
+          
+          render();
         });
       
       node.append("circle")
