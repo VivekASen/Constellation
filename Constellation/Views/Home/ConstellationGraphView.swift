@@ -20,6 +20,7 @@ struct ConstellationGraphView: View {
     @State private var selectedThemeFilter: String = GraphFilterToken.all
     @State private var selectedCollectionFilter: String = GraphFilterToken.all
     @State private var densityMode: GraphDensityMode = .simple
+    @State private var labelDensity: GraphLabelDensity = .medium
     @State private var panStart: CGSize = .zero
     @State private var zoomStart: CGFloat = 1.0
     @State private var canvasSize: CGSize = .zero
@@ -98,6 +99,13 @@ struct ConstellationGraphView: View {
             }
             .pickerStyle(.segmented)
             
+            Picker("Labels", selection: $labelDensity) {
+                ForEach(GraphLabelDensity.allCases, id: \.self) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            
             HStack(spacing: 8) {
                 Menu {
                     Picker("Theme", selection: $selectedThemeFilter) {
@@ -150,7 +158,8 @@ struct ConstellationGraphView: View {
                         positions: graph.positions,
                         animated: false,
                         showDenseLabels: showDenseLabels,
-                        focusNodeIDs: focusNodeIDs
+                        focusNodeIDs: focusNodeIDs,
+                        labelDensity: labelDensity
                     )
                     .scaleEffect(zoom)
                     .offset(pan)
@@ -196,6 +205,7 @@ struct ConstellationGraphView: View {
                 graph: graph,
                 filter: filter,
                 showDenseLabels: showDenseLabels,
+                labelDensity: labelDensity,
                 onClose: { showImmersiveMode = false },
                 onOpenNode: { node in
                     showImmersiveMode = false
@@ -209,6 +219,9 @@ struct ConstellationGraphView: View {
         .onChange(of: selectedCollectionFilter) { _, _ in resetViewport() }
         .onChange(of: filter) { _, _ in resetViewport() }
         .onChange(of: densityMode) { _, _ in resetViewport() }
+        .onChange(of: labelDensity) { _, _ in
+            selectedNodeID = nil
+        }
         .onChange(of: selectedNodeID) { _, newValue in
             guard let newValue else { return }
             focusOnNode(
@@ -229,7 +242,8 @@ struct ConstellationGraphView: View {
         positions: [String: CGPoint],
         animated: Bool,
         showDenseLabels: Bool,
-        focusNodeIDs: Set<String>?
+        focusNodeIDs: Set<String>?,
+        labelDensity: GraphLabelDensity
     ) -> some View {
         let edgeView = GraphEdgesLayer(
             edges: edges,
@@ -244,7 +258,8 @@ struct ConstellationGraphView: View {
             positions: positions,
             selectedNodeID: $selectedNodeID,
             showDenseLabels: showDenseLabels,
-            focusNodeIDs: focusNodeIDs
+            focusNodeIDs: focusNodeIDs,
+            labelDensity: labelDensity
         )
         
         if animated {
@@ -761,6 +776,7 @@ private struct ImmersiveConstellationView: View {
     let graph: GraphData
     let filter: GraphFilter
     let showDenseLabels: Bool
+    let labelDensity: GraphLabelDensity
     let onClose: () -> Void
     let onOpenNode: (GraphNode) -> Void
     
@@ -874,7 +890,8 @@ private struct ImmersiveConstellationView: View {
                                 positions: graph.positions,
                                 selectedNodeID: $selectedNodeID,
                                 showDenseLabels: showDenseLabels,
-                                focusNodeIDs: focusNodeIDs
+                                focusNodeIDs: focusNodeIDs,
+                                labelDensity: labelDensity
                             )
                         }
                         .scaleEffect(zoom)
@@ -1039,6 +1056,7 @@ private struct GraphNodesLayer: View {
     @Binding var selectedNodeID: String?
     let showDenseLabels: Bool
     let focusNodeIDs: Set<String>?
+    let labelDensity: GraphLabelDensity
     
     var body: some View {
         let avoidPoints = selectedPlacementContext()
@@ -1109,7 +1127,7 @@ private struct GraphNodesLayer: View {
                 return lhs.kind.labelPriority > rhs.kind.labelPriority
             }
         
-        let maxLabels = showDenseLabels ? 18 : 10
+        let maxLabels = maxLabelCount(showDenseLabels: showDenseLabels)
         let nodeBlockRadius: CGFloat = 18
         var result: [InlineLabelPlacement] = []
         var occupiedRects: [CGRect] = []
@@ -1220,6 +1238,17 @@ private struct GraphNodesLayer: View {
         let width = min(150, max(56, estimated))
         let height: CGFloat = 24
         return CGRect(x: point.x - width / 2, y: point.y - height / 2, width: width, height: height)
+    }
+    
+    private func maxLabelCount(showDenseLabels: Bool) -> Int {
+        switch labelDensity {
+        case .low:
+            return showDenseLabels ? 10 : 6
+        case .medium:
+            return showDenseLabels ? 18 : 10
+        case .high:
+            return showDenseLabels ? 30 : 16
+        }
     }
 }
 
@@ -1483,6 +1512,20 @@ private enum GraphDensityMode: CaseIterable {
         switch self {
         case .simple: return "Simple"
         case .detailed: return "Detailed"
+        }
+    }
+}
+
+private enum GraphLabelDensity: CaseIterable {
+    case low
+    case medium
+    case high
+    
+    var title: String {
+        switch self {
+        case .low: return "Labels: Low"
+        case .medium: return "Labels: Medium"
+        case .high: return "Labels: High"
         }
     }
 }
