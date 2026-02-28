@@ -35,10 +35,9 @@ struct ConstellationGraphView: View {
         let selectedCollection = selectedCollectionFilter == GraphFilterToken.all ? nil : selectedCollectionFilter
         
         let graph = buildGraph(themeFilter: selectedTheme, collectionFilter: selectedCollection, densityMode: densityMode)
-        let visibleKinds = filter.visibleKinds
-        let visibleNodes = graph.nodes.filter { visibleKinds.contains($0.kind) }
-        let visibleNodeIDs = Set(visibleNodes.map(\.id))
-        let allVisibleEdges = graph.edges.filter { visibleNodeIDs.contains($0.fromID) && visibleNodeIDs.contains($0.toID) }
+        let filteredGraph = applyGraphFilter(nodes: graph.nodes, edges: graph.edges, filter: filter)
+        let visibleNodes = filteredGraph.nodes
+        let allVisibleEdges = filteredGraph.edges
         let focusNodeIDs = focusNodeSet(selectedID: selectedNodeID, edges: allVisibleEdges)
         let renderedEdges = focusNodeIDs == nil
             ? allVisibleEdges
@@ -46,7 +45,6 @@ struct ConstellationGraphView: View {
                 focusNodeIDs!.contains(edge.fromID) && focusNodeIDs!.contains(edge.toID)
             }
         let renderedNodes = visibleNodes
-        let visibleEdges = densityMode == .simple ? Array(allVisibleEdges.prefix(70)) : allVisibleEdges
         let displayEdges = densityMode == .simple ? Array(renderedEdges.prefix(70)) : renderedEdges
         
         let showDenseLabels = densityMode == .detailed || selectedTheme != nil || selectedCollection != nil
@@ -556,7 +554,7 @@ struct ConstellationGraphView: View {
                     positions[item.id] = ringPosition(index: index, total: max(nonConnected.count, 1), radius: 0.88, phase: .pi / 7)
                 }
                 
-                return positions
+                return resolveNodeOverlaps(positions: positions, nodes: nodes)
             }
         }
         
@@ -581,7 +579,7 @@ struct ConstellationGraphView: View {
                 positions[item.id] = ringPosition(index: index, total: max(plainMedia.count, 1), radius: 0.92, phase: .pi / 5)
             }
             
-            return positions
+            return resolveNodeOverlaps(positions: positions, nodes: nodes)
         }
         
         // General mode: themes in core, media clustered around their strongest theme.
@@ -598,7 +596,7 @@ struct ConstellationGraphView: View {
             for (index, item) in shows.enumerated() {
                 positions[item.id] = ringPosition(index: index, total: max(shows.count, 1), radius: 0.9, phase: .pi / 8)
             }
-            return positions
+            return resolveNodeOverlaps(positions: positions, nodes: nodes)
         }
         
         var byAnchor: [String: [GraphNode]] = [:]
@@ -630,7 +628,7 @@ struct ConstellationGraphView: View {
             }
         }
         
-        return positions
+        return resolveNodeOverlaps(positions: positions, nodes: nodes)
     }
     
     private func buildAdjacency(edges: [GraphEdge]) -> [String: Set<String>] {
@@ -656,6 +654,73 @@ struct ConstellationGraphView: View {
         let sum = id.unicodeScalars.reduce(0) { $0 + Int($1.value) }
         let fraction = CGFloat(sum % 628) / 100.0
         return fraction
+    }
+
+    private func resolveNodeOverlaps(positions: [String: CGPoint], nodes: [GraphNode]) -> [String: CGPoint] {
+        var result = positions
+        let kindByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0.kind) })
+        let ids = result.keys.sorted()
+        guard ids.count > 1 else { return result }
+        
+        for _ in 0..<22 {
+            var delta: [String: CGPoint] = [:]
+            
+            for i in 0..<(ids.count - 1) {
+                for j in (i + 1)..<ids.count {
+                    let aID = ids[i]
+                    let bID = ids[j]
+                    guard let a = result[aID], let b = result[bID] else { continue }
+                    
+                    var dx = b.x - a.x
+                    var dy = b.y - a.y
+                    var distance = sqrt(dx * dx + dy * dy)
+                    
+                    if distance < 0.0001 {
+                        let angle = deterministicPhase(for: "\(aID)|\(bID)")
+                        dx = cos(angle)
+                        dy = sin(angle)
+                        distance = 1
+                    }
+                    
+                    let isCrossType = kindByID[aID] == .theme || kindByID[bID] == .theme
+                    let minDistance: CGFloat = isCrossType ? 0.18 : 0.13
+                    guard distance < minDistance else { continue }
+                    
+                    let push = (minDistance - distance) * 0.5
+                    let ux = dx / distance
+                    let uy = dy / distance
+                    
+                    let aShift = CGPoint(x: -ux * push, y: -uy * push)
+                    let bShift = CGPoint(x: ux * push, y: uy * push)
+                    
+                    delta[aID] = CGPoint(
+                        x: (delta[aID]?.x ?? 0) + aShift.x,
+                        y: (delta[aID]?.y ?? 0) + aShift.y
+                    )
+                    delta[bID] = CGPoint(
+                        x: (delta[bID]?.x ?? 0) + bShift.x,
+                        y: (delta[bID]?.y ?? 0) + bShift.y
+                    )
+                }
+            }
+            
+            var moved = false
+            for id in ids {
+                guard let p = result[id], let d = delta[id] else { continue }
+                let next = CGPoint(
+                    x: min(0.96, max(-0.96, p.x + d.x * 0.92)),
+                    y: min(0.96, max(-0.96, p.y + d.y * 0.92))
+                )
+                if abs(next.x - p.x) + abs(next.y - p.y) > 0.0007 {
+                    moved = true
+                }
+                result[id] = next
+            }
+            
+            if !moved { break }
+        }
+        
+        return result
     }
 }
 
@@ -707,13 +772,11 @@ private struct ImmersiveConstellationView: View {
     @State private var canvasSize: CGSize = .zero
     
     private var visibleNodes: [GraphNode] {
-        let kinds = filter.visibleKinds
-        return graph.nodes.filter { kinds.contains($0.kind) }
+        applyGraphFilter(nodes: graph.nodes, edges: graph.edges, filter: filter).nodes
     }
     
     private var visibleEdges: [GraphEdge] {
-        let ids = Set(visibleNodes.map(\.id))
-        return graph.edges.filter { ids.contains($0.fromID) && ids.contains($0.toID) }
+        applyGraphFilter(nodes: graph.nodes, edges: graph.edges, filter: filter).edges
     }
 
     private var focusNodeIDs: Set<String>? {
@@ -1352,6 +1415,56 @@ private enum GraphDensityMode: CaseIterable {
 
 private enum GraphFilterToken {
     static let all = "__all__"
+}
+
+private func applyGraphFilter(nodes: [GraphNode], edges: [GraphEdge], filter: GraphFilter) -> (nodes: [GraphNode], edges: [GraphEdge]) {
+    let nodeByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+    
+    func filtered(allowedIDs: Set<String>) -> (nodes: [GraphNode], edges: [GraphEdge]) {
+        let filteredNodes = nodes.filter { allowedIDs.contains($0.id) }
+        let filteredEdges = edges.filter { allowedIDs.contains($0.fromID) && allowedIDs.contains($0.toID) }
+        return (filteredNodes, filteredEdges)
+    }
+    
+    switch filter {
+    case .all:
+        let allIDs = Set(nodes.map(\.id))
+        return filtered(allowedIDs: allIDs)
+        
+    case .themes:
+        let themeIDs = Set(nodes.filter { $0.kind == .theme }.map(\.id))
+        return filtered(allowedIDs: themeIDs)
+        
+    case .movies:
+        let movieIDs = Set(nodes.filter { $0.kind == .movie }.map(\.id))
+        var allowed = movieIDs
+        
+        for edge in edges {
+            guard let fromKind = nodeByID[edge.fromID]?.kind, let toKind = nodeByID[edge.toID]?.kind else { continue }
+            if fromKind == .movie && toKind == .theme {
+                allowed.insert(edge.toID)
+            } else if fromKind == .theme && toKind == .movie {
+                allowed.insert(edge.fromID)
+            }
+        }
+        
+        return filtered(allowedIDs: allowed)
+        
+    case .tvShows:
+        let showIDs = Set(nodes.filter { $0.kind == .tvShow }.map(\.id))
+        var allowed = showIDs
+        
+        for edge in edges {
+            guard let fromKind = nodeByID[edge.fromID]?.kind, let toKind = nodeByID[edge.toID]?.kind else { continue }
+            if fromKind == .tvShow && toKind == .theme {
+                allowed.insert(edge.toID)
+            } else if fromKind == .theme && toKind == .tvShow {
+                allowed.insert(edge.fromID)
+            }
+        }
+        
+        return filtered(allowedIDs: allowed)
+    }
 }
 
 private struct ThemeSelection: Identifiable {
