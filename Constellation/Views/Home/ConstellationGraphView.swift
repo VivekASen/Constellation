@@ -1109,25 +1109,51 @@ private struct GraphNodesLayer: View {
                 return lhs.kind.labelPriority > rhs.kind.labelPriority
             }
         
-        let maxLabels = showDenseLabels ? 30 : 15
-        let minSpacing: CGFloat = showDenseLabels ? 30 : 38
+        let maxLabels = showDenseLabels ? 18 : 10
+        let nodeBlockRadius: CGFloat = 18
         var result: [InlineLabelPlacement] = []
+        var occupiedRects: [CGRect] = []
+        let blockedRects = avoidPoints.map {
+            CGRect(x: $0.x - 44, y: $0.y - 20, width: 88, height: 40)
+        }
+        let nodeCenters: [CGPoint] = nodes.compactMap { node in
+            guard let p = positions[node.id] else { return nil }
+            return point(for: p, in: size)
+        }
         
         for node in candidates {
             guard let p = positions[node.id] else { continue }
-            let proposed = labelPoint(for: p)
-            let overlaps = result.contains { distance($0.position, proposed) < minSpacing }
-            let blockedBySelection = avoidPoints.contains { distance($0, proposed) < 72 }
-            if overlaps || blockedBySelection { continue }
+            let placements = candidateLabelPoints(for: p)
+            guard let chosen = placements.first(where: { candidate in
+                let rect = labelRect(for: node.title, centeredAt: candidate)
+                
+                let overlapsPlacedLabels = occupiedRects.contains { $0.intersects(rect.insetBy(dx: -3, dy: -3)) }
+                if overlapsPlacedLabels { return false }
+                
+                let overlapsSelectionZone = blockedRects.contains { $0.intersects(rect.insetBy(dx: -2, dy: -2)) }
+                if overlapsSelectionZone { return false }
+                
+                let intersectsNodeBubble = nodeCenters.contains {
+                    distance($0, candidate) < nodeBlockRadius
+                }
+                if intersectsNodeBubble { return false }
+                
+                let insideCanvas = rect.minX >= 6 && rect.maxX <= size.width - 6 && rect.minY >= 6 && rect.maxY <= size.height - 6
+                return insideCanvas
+            }) else {
+                continue
+            }
             
+            let finalRect = labelRect(for: node.title, centeredAt: chosen)
             result.append(
                 InlineLabelPlacement(
                     id: node.id,
                     text: node.title,
                     tint: node.kind.color,
-                    position: proposed
+                    position: chosen
                 )
             )
+            occupiedRects.append(finalRect)
             
             if result.count >= maxLabels { break }
         }
@@ -1166,6 +1192,34 @@ private struct GraphNodesLayer: View {
         let bubblePoint = point(for: selectedNormalized, in: size)
         let labelPoint = preferredSelectedLabelPoint(for: selectedNormalized)
         return [bubblePoint, labelPoint]
+    }
+    
+    private func candidateLabelPoints(for normalized: CGPoint) -> [CGPoint] {
+        let base = point(for: normalized, in: size)
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        let dx = base.x - center.x
+        let dy = base.y - center.y
+        let length = max(0.001, sqrt(dx * dx + dy * dy))
+        let ux = dx / length
+        let uy = dy / length
+        let tx = -uy
+        let ty = ux
+        
+        return [
+            CGPoint(x: base.x + ux * 28, y: base.y + uy * 28),
+            CGPoint(x: base.x + ux * 30 + tx * 18, y: base.y + uy * 30 + ty * 18),
+            CGPoint(x: base.x + ux * 30 - tx * 18, y: base.y + uy * 30 - ty * 18),
+            CGPoint(x: base.x + tx * 24, y: base.y + ty * 24),
+            CGPoint(x: base.x - tx * 24, y: base.y - ty * 24),
+            CGPoint(x: base.x - ux * 26, y: base.y - uy * 26)
+        ]
+    }
+    
+    private func labelRect(for text: String, centeredAt point: CGPoint) -> CGRect {
+        let estimated = CGFloat(text.count) * 7.1 + 18
+        let width = min(150, max(56, estimated))
+        let height: CGFloat = 24
+        return CGRect(x: point.x - width / 2, y: point.y - height / 2, width: width, height: height)
     }
 }
 
