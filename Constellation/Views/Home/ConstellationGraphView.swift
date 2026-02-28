@@ -158,11 +158,13 @@ struct ConstellationGraphView: View {
                     }
                 }
             }
-            .frame(height: 390)
+            .frame(height: 440)
             .animation(.spring(response: 0.46, dampingFraction: 0.84), value: selectedThemeFilter)
             .animation(.spring(response: 0.46, dampingFraction: 0.84), value: selectedCollectionFilter)
             .animation(.spring(response: 0.46, dampingFraction: 0.84), value: filter)
             .animation(.spring(response: 0.46, dampingFraction: 0.84), value: densityMode)
+            
+            VisibleNodeLegend(nodes: visibleNodes, selectedNodeID: $selectedNodeID)
             
             if let selected = graph.nodes.first(where: { $0.id == selectedNodeID }) {
                 selectedNodePanel(selected)
@@ -191,6 +193,10 @@ struct ConstellationGraphView: View {
                 }
             )
         }
+        .onChange(of: selectedThemeFilter) { _, _ in resetViewport() }
+        .onChange(of: selectedCollectionFilter) { _, _ in resetViewport() }
+        .onChange(of: filter) { _, _ in resetViewport() }
+        .onChange(of: densityMode) { _, _ in resetViewport() }
     }
     
     @ViewBuilder
@@ -816,8 +822,8 @@ private struct GraphEdgesLayer: View {
     private func point(for normalized: CGPoint, in size: CGSize) -> CGPoint {
         let minSide = min(size.width, size.height)
         return CGPoint(
-            x: size.width / 2 + normalized.x * minSide * 0.44,
-            y: size.height / 2 + normalized.y * minSide * 0.44
+            x: size.width / 2 + normalized.x * minSide * 0.46,
+            y: size.height / 2 + normalized.y * minSide * 0.46
         )
     }
 }
@@ -830,6 +836,8 @@ private struct GraphNodesLayer: View {
     let showDenseLabels: Bool
     
     var body: some View {
+        let inlineLabels = buildInlineLabels()
+        
         ZStack {
             ForEach(nodes) { node in
                 if let position = positions[node.id] {
@@ -838,13 +846,13 @@ private struct GraphNodesLayer: View {
                         .onTapGesture {
                             selectedNodeID = node.id
                         }
-                    
-                    if shouldShowInlineLabel(for: node) {
-                        InlineNodeLabel(text: node.title, tint: node.kind.color)
-                            .position(labelPoint(for: position))
-                            .allowsHitTesting(false)
-                    }
                 }
+            }
+            
+            ForEach(inlineLabels, id: \.id) { label in
+                InlineNodeLabel(text: label.text, tint: label.tint)
+                    .position(label.position)
+                    .allowsHitTesting(false)
             }
             
             if let selectedNodeID,
@@ -864,8 +872,8 @@ private struct GraphNodesLayer: View {
     private func point(for normalized: CGPoint, in size: CGSize) -> CGPoint {
         let minSide = min(size.width, size.height)
         return CGPoint(
-            x: size.width / 2 + normalized.x * minSide * 0.44,
-            y: size.height / 2 + normalized.y * minSide * 0.44
+            x: size.width / 2 + normalized.x * minSide * 0.46,
+            y: size.height / 2 + normalized.y * minSide * 0.46
         )
     }
     
@@ -883,10 +891,49 @@ private struct GraphNodesLayer: View {
         )
     }
     
-    private func shouldShowInlineLabel(for node: GraphNode) -> Bool {
-        if selectedNodeID == node.id { return false }
-        if node.kind == .theme { return true }
-        return showDenseLabels
+    private func buildInlineLabels() -> [InlineLabelPlacement] {
+        let candidates = nodes
+            .filter { node in
+                if selectedNodeID == node.id { return false }
+                if node.kind == .theme { return true }
+                return showDenseLabels
+            }
+            .sorted { lhs, rhs in
+                if lhs.kind.labelPriority == rhs.kind.labelPriority {
+                    return lhs.id < rhs.id
+                }
+                return lhs.kind.labelPriority > rhs.kind.labelPriority
+            }
+        
+        let maxLabels = showDenseLabels ? 30 : 15
+        let minSpacing: CGFloat = showDenseLabels ? 30 : 38
+        var result: [InlineLabelPlacement] = []
+        
+        for node in candidates {
+            guard let p = positions[node.id] else { continue }
+            let proposed = labelPoint(for: p)
+            let overlaps = result.contains { distance($0.position, proposed) < minSpacing }
+            if overlaps { continue }
+            
+            result.append(
+                InlineLabelPlacement(
+                    id: node.id,
+                    text: node.title,
+                    tint: node.kind.color,
+                    position: proposed
+                )
+            )
+            
+            if result.count >= maxLabels { break }
+        }
+        
+        return result
+    }
+    
+    private func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let dx = a.x - b.x
+        let dy = a.y - b.y
+        return sqrt(dx * dx + dy * dy)
     }
 }
 
@@ -949,6 +996,48 @@ private struct InlineNodeLabel: View {
                     .stroke(tint.opacity(0.25), lineWidth: 0.8)
             }
             .frame(maxWidth: 110)
+    }
+}
+
+private struct InlineLabelPlacement {
+    let id: String
+    let text: String
+    let tint: Color
+    let position: CGPoint
+}
+
+private struct VisibleNodeLegend: View {
+    let nodes: [GraphNode]
+    @Binding var selectedNodeID: String?
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Visible Nodes")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(nodes.prefix(30)) { node in
+                        Button {
+                            selectedNodeID = node.id
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text(node.kind.icon)
+                                Text(node.title)
+                                    .lineLimit(1)
+                            }
+                            .font(.caption2)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(selectedNodeID == node.id ? node.kind.color.opacity(0.25) : Color.gray.opacity(0.12))
+                            .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1063,6 +1152,14 @@ private enum GraphNodeKind: Hashable {
         case .movie: return "Movie"
         case .tvShow: return "TV Show"
         case .theme: return "Theme"
+        }
+    }
+    
+    var labelPriority: Int {
+        switch self {
+        case .theme: return 3
+        case .movie: return 2
+        case .tvShow: return 1
         }
     }
 }
