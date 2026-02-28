@@ -1298,8 +1298,8 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
     let spinY = 0.32;
     let velocityX = 0.0;
     let velocityY = 0.0;
-    const baseAutoSpinY = 0.00075;
-    const idleResumeMs = 2200;
+    const baseAutoSpinY = 0.00012;
+    const idleResumeMs = 2600;
     let autoSpin = true;
     let lastInteractionAt = Date.now();
     let dragging = false;
@@ -1433,7 +1433,7 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
         
         const isFrontCaption = !hoverNodeId && !selectedNodeId && autoSpin && p.node.id === frontCaptionNodeId;
         if (isHover || isSelected || isFrontCaption) {
-          drawLabel(p.node.title, p.px + 11, p.py - 10, isFrontCaption ? 0.78 : 1.0);
+          drawLabel(p.node.title, p.px + 11, p.py - 10, isFrontCaption ? 0.92 : 1.0);
         }
       }
     }
@@ -1499,12 +1499,14 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
       }
       if (!dragging) {
         if (autoSpin) {
-          velocityY += baseAutoSpinY;
+          velocityY = velocityY * 0.92 + baseAutoSpinY * 0.08;
+          velocityX *= 0.95;
+        } else {
+          velocityY *= 0.965;
         }
         spinX += velocityX;
         spinY += velocityY;
         velocityX *= 0.985;
-        velocityY *= autoSpin ? 0.992 : 0.965;
       }
       draw();
       requestAnimationFrame(tick);
