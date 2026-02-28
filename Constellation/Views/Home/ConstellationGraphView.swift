@@ -13,8 +13,6 @@ struct ConstellationGraphView: View {
     let tvShows: [TVShow]
     let collections: [ItemCollection]
     
-    @State private var zoom: CGFloat = 1.0
-    @State private var pan: CGSize = .zero
     @State private var selectedNodeID: String?
     @State private var filter: GraphFilter = .all
     @State private var showImmersiveMode = false
@@ -22,10 +20,7 @@ struct ConstellationGraphView: View {
     @State private var selectedCollectionFilter: String = GraphFilterToken.all
     @State private var densityMode: GraphDensityMode = .simple
     @State private var labelDensity: GraphLabelDensity = .medium
-    @State private var panStart: CGSize = .zero
-    @State private var zoomStart: CGFloat = 1.0
-    @State private var canvasSize: CGSize = .zero
-    @State private var webResetToken: Int = 0
+    @State private var homeResetToken: Int = 0
     
     @State private var selectedMovie: Movie?
     @State private var selectedTVShow: TVShow?
@@ -34,20 +29,15 @@ struct ConstellationGraphView: View {
     var body: some View {
         let themeOptions = Array(Set(movies.flatMap(\.themes) + tvShows.flatMap(\.themes))).sorted()
         let collectionOptions = collections.sorted { $0.name < $1.name }
+        
+        let homeGraph = buildGraph(themeFilter: nil, collectionFilter: nil, densityMode: .detailed)
+        let homeGraphFiltered = applyGraphFilter(nodes: homeGraph.nodes, edges: homeGraph.edges, filter: .all)
+        let homeNodes = homeGraphFiltered.nodes
+        let homeEdges = homeGraphFiltered.edges
+        
         let selectedTheme = selectedThemeFilter == GraphFilterToken.all ? nil : selectedThemeFilter
         let selectedCollection = selectedCollectionFilter == GraphFilterToken.all ? nil : selectedCollectionFilter
-        let graph = buildGraph(themeFilter: selectedTheme, collectionFilter: selectedCollection, densityMode: densityMode)
-        let filteredGraph = applyGraphFilter(nodes: graph.nodes, edges: graph.edges, filter: filter)
-        let visibleNodes = filteredGraph.nodes
-        let allVisibleEdges = filteredGraph.edges
-        let focusNodeIDs = focusNodeSet(selectedID: selectedNodeID, edges: allVisibleEdges)
-        let renderedEdges = focusNodeIDs == nil
-            ? allVisibleEdges
-            : allVisibleEdges.filter { edge in
-                focusNodeIDs!.contains(edge.fromID) && focusNodeIDs!.contains(edge.toID)
-            }
-        let renderedNodes = visibleNodes
-        let displayEdges = densityMode == .simple ? Array(renderedEdges.prefix(70)) : renderedEdges
+        let immersiveGraph = buildGraph(themeFilter: selectedTheme, collectionFilter: selectedCollection, densityMode: densityMode)
         
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
@@ -94,23 +84,19 @@ struct ConstellationGraphView: View {
                     RoundedRectangle(cornerRadius: 16)
                         .fill(Color(.systemGray6))
                     
-                    ConstellationD3WebView(
-                        nodes: renderedNodes,
-                        edges: displayEdges,
+                    Constellation3DPreviewWebView(
+                        nodes: homeNodes,
+                        edges: homeEdges,
                         selectedNodeID: $selectedNodeID,
-                        resetToken: webResetToken,
-                        labelDensity: labelDensity,
+                        resetToken: homeResetToken,
                         onOpenNode: { nodeID in
-                            guard let node = renderedNodes.first(where: { $0.id == nodeID }) else { return }
+                            guard let node = homeNodes.first(where: { $0.id == nodeID }) else { return }
                             openNode(node)
                         }
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .onAppear {
-                        canvasSize = proxy.size
-                    }
                     
-                    if visibleNodes.isEmpty {
+                    if homeNodes.isEmpty {
                         ContentUnavailableView(
                             "No Graph Nodes",
                             systemImage: "network",
@@ -125,9 +111,9 @@ struct ConstellationGraphView: View {
             .animation(.spring(response: 0.46, dampingFraction: 0.84), value: filter)
             .animation(.spring(response: 0.46, dampingFraction: 0.84), value: densityMode)
             
-            VisibleNodeLegend(nodes: visibleNodes, selectedNodeID: $selectedNodeID)
+            VisibleNodeLegend(nodes: homeNodes, selectedNodeID: $selectedNodeID)
             
-            if let selected = graph.nodes.first(where: { $0.id == selectedNodeID }) {
+            if let selected = homeNodes.first(where: { $0.id == selectedNodeID }) {
                 selectedNodePanel(selected)
             }
         }
@@ -142,7 +128,7 @@ struct ConstellationGraphView: View {
         }
         .fullScreenCover(isPresented: $showImmersiveMode) {
             ImmersiveConstellationView(
-                graph: graph,
+                graph: immersiveGraph,
                 filter: $filter,
                 labelDensity: $labelDensity,
                 densityMode: $densityMode,
@@ -165,51 +151,6 @@ struct ConstellationGraphView: View {
         .onChange(of: densityMode) { _, _ in resetViewport() }
         .onChange(of: labelDensity) { _, _ in
             selectedNodeID = nil
-        }
-    }
-    
-    @ViewBuilder
-    private func graphLayer(
-        size: CGSize,
-        nodes: [GraphNode],
-        edges: [GraphEdge],
-        positions: [String: CGPoint],
-        animated: Bool,
-        showDenseLabels: Bool,
-        focusNodeIDs: Set<String>?,
-        labelDensity: GraphLabelDensity
-    ) -> some View {
-        let edgeView = GraphEdgesLayer(
-            edges: edges,
-            size: size,
-            positions: positions,
-            animated: animated,
-            focusNodeIDs: focusNodeIDs
-        )
-        let nodeView = GraphNodesLayer(
-            nodes: nodes,
-            size: size,
-            positions: positions,
-            selectedNodeID: $selectedNodeID,
-            showDenseLabels: showDenseLabels,
-            focusNodeIDs: focusNodeIDs,
-            labelDensity: labelDensity
-        )
-        
-        if animated {
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
-                ZStack {
-                    edgeView
-                        .environment(\.graphAnimationTime, timeline.date.timeIntervalSinceReferenceDate)
-                    nodeView
-                }
-            }
-        } else {
-            ZStack {
-                edgeView
-                    .environment(\.graphAnimationTime, 0)
-                nodeView
-            }
         }
     }
     
@@ -385,81 +326,9 @@ struct ConstellationGraphView: View {
         return GraphData(nodes: nodes, edges: finalEdges, positions: positions)
     }
     
-    private func graphGesture(maxZoom: CGFloat) -> some Gesture {
-        SimultaneousGesture(
-            DragGesture()
-                .onChanged { value in
-                    pan = CGSize(
-                        width: panStart.width + value.translation.width,
-                        height: panStart.height + value.translation.height
-                    )
-                }
-                .onEnded { _ in
-                    panStart = pan
-                },
-            MagnificationGesture()
-                .onChanged { value in
-                    zoom = min(max(zoomStart * value, 0.65), maxZoom)
-                }
-                .onEnded { _ in
-                    zoomStart = zoom
-                }
-        )
-    }
-    
     private func resetViewport() {
-        withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
-            zoom = 1.0
-            pan = .zero
-            zoomStart = 1.0
-            panStart = .zero
-            selectedNodeID = nil
-            webResetToken += 1
-        }
-    }
-
-    private func focusNodeSet(selectedID: String?, edges: [GraphEdge]) -> Set<String>? {
-        guard let selectedID else { return nil }
-        var neighbors: Set<String> = [selectedID]
-        for edge in edges {
-            if edge.fromID == selectedID {
-                neighbors.insert(edge.toID)
-            } else if edge.toID == selectedID {
-                neighbors.insert(edge.fromID)
-            }
-        }
-        return neighbors.count > 1 ? neighbors : nil
-    }
-
-    private func focusOnNode(
-        nodeID: String,
-        positions: [String: CGPoint],
-        canvasSize: CGSize,
-        targetZoom: CGFloat,
-        maxZoom: CGFloat
-    ) {
-        guard canvasSize.width > 0, canvasSize.height > 0, let normalized = positions[nodeID] else { return }
-        let zoomValue = min(max(targetZoom, 0.65), maxZoom)
-        let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
-        let point = graphPoint(for: normalized, in: canvasSize)
-        let focusedPan = CGSize(
-            width: -((point.x - center.x) * zoomValue),
-            height: -((point.y - center.y) * zoomValue)
-        )
-        withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
-            zoom = zoomValue
-            pan = focusedPan
-            zoomStart = zoomValue
-            panStart = focusedPan
-        }
-    }
-
-    private func graphPoint(for normalized: CGPoint, in size: CGSize) -> CGPoint {
-        let minSide = min(size.width, size.height)
-        return CGPoint(
-            x: size.width / 2 + normalized.x * minSide * 0.46,
-            y: size.height / 2 + normalized.y * minSide * 0.46
-        )
+        selectedNodeID = nil
+        homeResetToken += 1
     }
     
     private func ringPosition(index: Int, total: Int, radius: CGFloat, phase: CGFloat) -> CGPoint {
@@ -1282,6 +1151,424 @@ private struct VisibleNodeLegend: View {
                 }
             }
         }
+    }
+}
+
+private struct Constellation3DPreviewWebView: UIViewRepresentable {
+    let nodes: [GraphNode]
+    let edges: [GraphEdge]
+    @Binding var selectedNodeID: String?
+    let resetToken: Int
+    let onOpenNode: (String) -> Void
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+    
+    func makeUIView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        let userContent = WKUserContentController()
+        userContent.add(context.coordinator, name: "nodeTap")
+        userContent.add(context.coordinator, name: "nodeOpen")
+        config.userContentController = userContent
+        config.defaultWebpagePreferences.allowsContentJavaScript = true
+        
+        let webView = WKWebView(frame: .zero, configuration: config)
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+        webView.navigationDelegate = context.coordinator
+        context.coordinator.webView = webView
+        context.coordinator.pushBindings(selectedNodeID: $selectedNodeID, onOpenNode: onOpenNode)
+        
+        if let html = context.coordinator.initialHTML(payload: payload()) {
+            webView.loadHTMLString(html, baseURL: nil)
+        }
+        
+        return webView
+    }
+    
+    func updateUIView(_ uiView: WKWebView, context: Context) {
+        context.coordinator.pushBindings(selectedNodeID: $selectedNodeID, onOpenNode: onOpenNode)
+        context.coordinator.pushGraph(payload(), selectedNodeID: selectedNodeID, resetToken: resetToken)
+    }
+    
+    private func payload() -> D3GraphPayload {
+        D3GraphPayload(
+            nodes: nodes.map {
+                D3NodePayload(
+                    id: $0.id,
+                    title: $0.title,
+                    kind: $0.kind.d3Kind,
+                    color: $0.kind.webColor,
+                    icon: $0.kind.icon
+                )
+            },
+            links: edges.map {
+                D3LinkPayload(
+                    source: $0.fromID,
+                    target: $0.toID,
+                    weight: $0.weight
+                )
+            },
+            labelDensity: GraphLabelDensity.medium.d3Token
+        )
+    }
+    
+    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+        weak var webView: WKWebView?
+        private var didFinishLoad = false
+        private var lastGraphJSON: String?
+        private var lastResetToken: Int = 0
+        private var setSelectedNode: (String?) -> Void = { _ in }
+        private var openNode: (String) -> Void = { _ in }
+        
+        func pushBindings(selectedNodeID: Binding<String?>, onOpenNode: @escaping (String) -> Void) {
+            self.setSelectedNode = { selectedNodeID.wrappedValue = $0 }
+            self.openNode = onOpenNode
+        }
+        
+        func initialHTML(payload: D3GraphPayload) -> String? {
+            guard let json = payload.jsonString else { return nil }
+            lastGraphJSON = json
+            return Self.htmlTemplate.replacingOccurrences(of: "__INITIAL_GRAPH_JSON__", with: json)
+        }
+        
+        func pushGraph(_ payload: D3GraphPayload, selectedNodeID: String?, resetToken: Int) {
+            guard didFinishLoad, let webView, let json = payload.jsonString else { return }
+            
+            if lastGraphJSON != json {
+                webView.evaluateJavaScript("window.__updateGraph(\(json));")
+                lastGraphJSON = json
+            }
+            
+            if let selectedNodeID, let selectedLiteral = selectedNodeID.jsSingleQuoted {
+                webView.evaluateJavaScript("window.__selectNode(\(selectedLiteral));")
+            } else {
+                webView.evaluateJavaScript("window.__selectNode(null);")
+            }
+            
+            if resetToken != lastResetToken {
+                lastResetToken = resetToken
+                webView.evaluateJavaScript("window.__resetView();")
+            }
+        }
+        
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            didFinishLoad = true
+            if let json = lastGraphJSON {
+                webView.evaluateJavaScript("window.__updateGraph(\(json));")
+            }
+        }
+        
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard let id = message.body as? String else { return }
+            if message.name == "nodeTap" {
+                setSelectedNode(id)
+            } else if message.name == "nodeOpen" {
+                openNode(id)
+            }
+        }
+        
+        static let htmlTemplate = #"""
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+    #root { width: 100%; height: 100%; position: relative; }
+    #canvas { width: 100%; height: 100%; display: block; }
+    #hint {
+      position: absolute; left: 10px; bottom: 8px; padding: 6px 8px; border-radius: 10px;
+      color: rgba(235, 243, 255, 0.92); font: 11px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+      background: rgba(10, 20, 56, 0.4); pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <canvas id="canvas"></canvas>
+    <div id="hint">Drag to rotate · Tap a node to select · Double-tap to open</div>
+  </div>
+  <script>
+    let graph = __INITIAL_GRAPH_JSON__;
+    let selectedNodeId = null;
+    let spinX = -0.45;
+    let spinY = 0.32;
+    let velocityX = 0.0;
+    let velocityY = 0.0022;
+    let dragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    let hoverNodeId = null;
+    let lastTap = { id: null, time: 0 };
+    
+    const root = document.getElementById("root");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    
+    function resize() {
+      const dpr = window.devicePixelRatio || 1;
+      const w = root.clientWidth || 320;
+      const h = root.clientHeight || 280;
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
+      canvas.style.width = w + "px";
+      canvas.style.height = h + "px";
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    
+    function hash01(str) {
+      let h = 2166136261;
+      for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return (h >>> 0) / 4294967295;
+    }
+    
+    function buildState() {
+      const nodes = graph.nodes.map((n) => {
+        const u = hash01(n.id + ":u");
+        const v = hash01(n.id + ":v");
+        const theta = u * Math.PI * 2;
+        const phi = Math.acos(2 * v - 1);
+        const r = 0.75 + hash01(n.id + ":r") * 0.38;
+        return {
+          ...n,
+          x: Math.sin(phi) * Math.cos(theta) * r,
+          y: Math.cos(phi) * r,
+          z: Math.sin(phi) * Math.sin(theta) * r
+        };
+      });
+      const nodeById = new Map(nodes.map((n) => [n.id, n]));
+      const links = graph.links
+        .map((l) => ({ ...l, a: nodeById.get(l.source), b: nodeById.get(l.target) }))
+        .filter((l) => l.a && l.b);
+      return { nodes, links };
+    }
+    
+    let state = buildState();
+    
+    function rotate(p, ax, ay) {
+      const cosY = Math.cos(ay), sinY = Math.sin(ay);
+      const cosX = Math.cos(ax), sinX = Math.sin(ax);
+      let x = p.x * cosY - p.z * sinY;
+      let z = p.x * sinY + p.z * cosY;
+      let y = p.y * cosX - z * sinX;
+      z = p.y * sinX + z * cosX;
+      return { x, y, z };
+    }
+    
+    function project(rot, w, h) {
+      const fov = Math.min(w, h) * 0.9;
+      const depth = rot.z + 2.3;
+      const s = fov / Math.max(0.2, depth);
+      return { px: w * 0.5 + rot.x * s, py: h * 0.5 + rot.y * s, scale: s, depth };
+    }
+    
+    function draw() {
+      const w = root.clientWidth || 320;
+      const h = root.clientHeight || 280;
+      ctx.clearRect(0, 0, w, h);
+      
+      const bg = ctx.createRadialGradient(w * 0.2, h * 0.1, 8, w * 0.5, h * 0.5, Math.max(w, h));
+      bg.addColorStop(0, "rgba(20, 32, 71, 0.94)");
+      bg.addColorStop(0.45, "rgba(10, 18, 51, 0.96)");
+      bg.addColorStop(1, "rgba(5, 12, 36, 0.98)");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, w, h);
+      
+      const projected = state.nodes.map((node) => {
+        const r = rotate(node, spinX, spinY);
+        const p = project(r, w, h);
+        return { node, ...p };
+      }).sort((a, b) => b.depth - a.depth);
+      
+      const pos = new Map(projected.map((p) => [p.node.id, p]));
+      
+      for (const link of state.links) {
+        const a = pos.get(link.source);
+        const b = pos.get(link.target);
+        if (!a || !b) continue;
+        const alpha = 0.16 + Math.max(0, 0.32 - Math.abs((a.depth + b.depth) * 0.08));
+        ctx.strokeStyle = `rgba(205, 220, 255, ${alpha})`;
+        ctx.lineWidth = Math.min(2.2, 0.5 + (link.weight || 1) * 0.45);
+        ctx.beginPath();
+        ctx.moveTo(a.px, a.py);
+        ctx.lineTo(b.px, b.py);
+        ctx.stroke();
+      }
+      
+      for (const p of projected) {
+        const isSelected = p.node.id === selectedNodeId;
+        const isHover = p.node.id === hoverNodeId;
+        const radius = (isSelected ? 7.8 : 6.2) * Math.min(1.55, Math.max(0.7, p.scale / 95));
+        
+        ctx.beginPath();
+        ctx.fillStyle = p.node.color;
+        ctx.globalAlpha = selectedNodeId && !isSelected ? 0.48 : 0.96;
+        ctx.arc(p.px, p.py, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+        
+        ctx.lineWidth = isSelected ? 2.2 : (isHover ? 1.6 : 1.0);
+        ctx.strokeStyle = isSelected ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.45)";
+        ctx.stroke();
+        
+        if (isHover || isSelected) {
+          drawLabel(p.node.title, p.px + 11, p.py - 10);
+        }
+      }
+    }
+    
+    function drawLabel(text, x, y) {
+      ctx.font = "12px -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif";
+      const w = Math.min(188, Math.max(52, ctx.measureText(text).width + 14));
+      const h = 24;
+      ctx.fillStyle = "rgba(18, 24, 48, 0.86)";
+      roundRect(x, y - h, w, h, 10);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(210, 220, 255, 0.4)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = "rgba(245, 248, 255, 0.97)";
+      ctx.fillText(text, x + 7, y - 8);
+    }
+    
+    function roundRect(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath();
+    }
+    
+    function pickNode(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      let best = null;
+      let bestDist = 22;
+      const w = root.clientWidth || 320;
+      const h = root.clientHeight || 280;
+      
+      for (const node of state.nodes) {
+        const r = rotate(node, spinX, spinY);
+        const p = project(r, w, h);
+        const d = Math.hypot(p.px - x, p.py - y);
+        if (d < bestDist) {
+          bestDist = d;
+          best = node.id;
+        }
+      }
+      return best;
+    }
+    
+    function tick() {
+      if (!dragging) {
+        spinX += velocityX;
+        spinY += velocityY;
+        velocityX *= 0.985;
+        velocityY *= 0.988;
+      }
+      draw();
+      requestAnimationFrame(tick);
+    }
+    
+    canvas.addEventListener("mousedown", (e) => {
+      dragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+    });
+    window.addEventListener("mouseup", () => { dragging = false; });
+    window.addEventListener("mousemove", (e) => {
+      if (dragging) {
+        const dx = e.clientX - lastX;
+        const dy = e.clientY - lastY;
+        spinY += dx * 0.006;
+        spinX += dy * 0.006;
+        velocityY = dx * 0.00024;
+        velocityX = dy * 0.00024;
+        lastX = e.clientX;
+        lastY = e.clientY;
+      } else {
+        hoverNodeId = pickNode(e.clientX, e.clientY);
+      }
+    });
+    
+    canvas.addEventListener("touchstart", (e) => {
+      const t = e.touches[0];
+      dragging = true;
+      lastX = t.clientX;
+      lastY = t.clientY;
+    }, { passive: true });
+    
+    canvas.addEventListener("touchmove", (e) => {
+      const t = e.touches[0];
+      const dx = t.clientX - lastX;
+      const dy = t.clientY - lastY;
+      spinY += dx * 0.006;
+      spinX += dy * 0.006;
+      velocityY = dx * 0.00024;
+      velocityX = dy * 0.00024;
+      lastX = t.clientX;
+      lastY = t.clientY;
+      hoverNodeId = pickNode(t.clientX, t.clientY);
+    }, { passive: true });
+    
+    canvas.addEventListener("touchend", () => {
+      dragging = false;
+    }, { passive: true });
+    
+    canvas.addEventListener("click", (e) => {
+      const id = pickNode(e.clientX, e.clientY);
+      if (!id) return;
+      selectedNodeId = id;
+      if (window.webkit?.messageHandlers?.nodeTap) {
+        window.webkit.messageHandlers.nodeTap.postMessage(id);
+      }
+      const now = Date.now();
+      if (lastTap.id === id && (now - lastTap.time) < 320) {
+        if (window.webkit?.messageHandlers?.nodeOpen) {
+          window.webkit.messageHandlers.nodeOpen.postMessage(id);
+        }
+      }
+      lastTap = { id, time: now };
+    });
+    
+    window.__updateGraph = function(nextGraph) {
+      graph = nextGraph;
+      state = buildState();
+    };
+    
+    window.__selectNode = function(id) {
+      selectedNodeId = id;
+    };
+    
+    window.__resetView = function() {
+      spinX = -0.45;
+      spinY = 0.32;
+      velocityX = 0.0;
+      velocityY = 0.0022;
+      hoverNodeId = null;
+      selectedNodeId = null;
+    };
+    
+    window.addEventListener("resize", resize);
+    resize();
+    tick();
+  </script>
+</body>
+</html>
+"""#
     }
 }
 
