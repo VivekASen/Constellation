@@ -1396,9 +1396,9 @@ private struct Constellation3DPreviewWebView: UIViewRepresentable {
         .slice()
         .sort((a, b) => a.depth - b.depth)
         .slice(0, 8);
-      const minLabelDistance = 56;
+      const minLabelDistance = 50;
       for (const c of frontCandidates) {
-        if (frontCaptionNodeIds.length >= 3) break;
+        if (frontCaptionNodeIds.length >= 5) break;
         const tooClose = frontCaptionNodeIds.some((picked) => {
           const dx = picked.px - c.px;
           const dy = picked.py - c.py;
@@ -1817,6 +1817,7 @@ private struct ConstellationD3WebView: UIViewRepresentable {
       
       const links = graph.links.map((d) => ({ ...d }));
       const nodes = graph.nodes.map((d) => ({ ...d }));
+      const nodeById = new Map(nodes.map((n) => [n.id, n]));
       const neighbors = neighborSet(links, selectedNodeId);
       
       const link = stage.append("g")
@@ -1831,6 +1832,27 @@ private struct ConstellationD3WebView: UIViewRepresentable {
           const b = typeof d.target === "object" ? d.target.id : d.target;
           return (a === selectedNodeId || b === selectedNodeId) ? 0.88 : 0.1;
         });
+      
+      const kindOf = (endpoint) => {
+        if (typeof endpoint === "object") return endpoint.kind;
+        return nodeById.get(endpoint)?.kind;
+      };
+      const themeLinks = links.filter((l) => kindOf(l.source) === "theme" || kindOf(l.target) === "theme");
+      const sparkCount = Math.max(0, Math.min(16, Math.floor(themeLinks.length * 0.45)));
+      const sparks = Array.from({ length: sparkCount }, (_, i) => ({
+        id: i,
+        linkIndex: i % Math.max(1, themeLinks.length),
+        phase: (i * 0.6180339) % 1,
+        speed: 0.14 + ((i * 7) % 5) * 0.018,
+      }));
+      const sparkLayer = stage.append("g")
+        .style("pointer-events", "none")
+        .selectAll("circle")
+        .data(sparks)
+        .join("circle")
+        .attr("r", 0)
+        .attr("fill", "#a5f3fc")
+        .attr("opacity", 0);
       
       const node = stage.append("g")
         .selectAll("g")
@@ -1903,6 +1925,8 @@ private struct ConstellationD3WebView: UIViewRepresentable {
       );
       
       simulation.on("tick", () => {
+        const t = Date.now() / 1000;
+        
         link
           .attr("x1", (d) => d.source.x)
           .attr("y1", (d) => d.source.y)
@@ -1910,6 +1934,28 @@ private struct ConstellationD3WebView: UIViewRepresentable {
           .attr("y2", (d) => d.target.y);
         
         node.attr("transform", (d) => `translate(${d.x},${d.y})`);
+        
+        sparkLayer
+          .attr("cx", (s) => {
+            const l = themeLinks[s.linkIndex];
+            if (!l || !l.source || !l.target) return -100;
+            const p = (t * s.speed + s.phase) % 1;
+            return l.source.x + (l.target.x - l.source.x) * p;
+          })
+          .attr("cy", (s) => {
+            const l = themeLinks[s.linkIndex];
+            if (!l || !l.source || !l.target) return -100;
+            const p = (t * s.speed + s.phase) % 1;
+            return l.source.y + (l.target.y - l.source.y) * p;
+          })
+          .attr("r", (s) => {
+            const flicker = (Math.sin(t * 2.1 + s.phase * 11) + 1) * 0.5;
+            return flicker > 0.73 ? 1.7 : 0;
+          })
+          .attr("opacity", (s) => {
+            const flicker = (Math.sin(t * 2.1 + s.phase * 11) + 1) * 0.5;
+            return flicker > 0.73 ? 0.95 : 0;
+          });
       });
     }
     
