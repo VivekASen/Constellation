@@ -8,13 +8,11 @@ struct DiscoveryView: View {
     @State private var draftQuery = ""
     @State private var isSearching = false
     @State private var turns: [DiscoveryChatTurn] = []
-    @State private var conversationState = DiscoveryConversationState()
+    @State private var conversationState = ChatConversationState()
     @State private var showingAddMovie: TMDBMovie?
     @State private var showingAddTVShow: TMDBTVShow?
     @State private var pendingMovieForAddFeedback: TMDBMovie?
     @State private var pendingTVForAddFeedback: TMDBTVShow?
-    @State private var addedMovieIDs: Set<Int> = []
-    @State private var addedTVIDs: Set<Int> = []
     @State private var toastMessage: String?
 
     private let starterPrompts = [
@@ -28,6 +26,9 @@ struct DiscoveryView: View {
     private let surface = Color(uiColor: .secondarySystemBackground)
     private let pageBackground = Color(uiColor: .systemGroupedBackground)
 
+    private let intentService = ChatIntentService.shared
+    private let memoryStore = RecommendationMemoryStore.shared
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -36,22 +37,21 @@ struct DiscoveryView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 14) {
-                            assistantBubble("Tell me a topic and I’ll keep refining with you. I’ll return one strong movie pick and one strong TV pick each turn.")
+                            assistantBubble("Tell me what you want to watch and I’ll refine with you. I can compare against your library and keep improving suggestions each turn.")
 
                             if turns.isEmpty {
                                 starterPromptSection
                             }
 
                             ForEach(turns) { turn in
-                                let display = turn.displayPreference
                                 userBubble(turn.userText)
 
                                 if let summary = turn.assistantSummary {
                                     assistantBubble(summary)
                                 }
 
-                                if let result = turn.result, display.movieLimit > 0 {
-                                    ForEach(Array(result.recommendations.prefix(display.movieLimit))) { movie in
+                                if let result = turn.result, turn.displayPreference.movieLimit > 0 {
+                                    ForEach(Array(filteredMovies(from: result).prefix(turn.displayPreference.movieLimit))) { movie in
                                         let isAdded = isMovieInLibrary(movie.id)
                                         mediaBubble(
                                             title: movie.title,
@@ -65,6 +65,11 @@ struct DiscoveryView: View {
                                                 pendingMovieForAddFeedback = movie
                                                 showingAddMovie = movie
                                             },
+                                            secondaryActionTitle: isAdded ? nil : "Not this",
+                                            secondaryAction: {
+                                                memoryStore.markRejectedMovie(movie.id)
+                                                showToast("Noted. I’ll avoid \(movie.title)")
+                                            },
                                             onTap: {
                                                 pendingMovieForAddFeedback = movie
                                                 showingAddMovie = movie
@@ -73,8 +78,8 @@ struct DiscoveryView: View {
                                     }
                                 }
 
-                                if let result = turn.result, display.tvLimit > 0 {
-                                    ForEach(Array(result.tvRecommendations.prefix(display.tvLimit))) { show in
+                                if let result = turn.result, turn.displayPreference.tvLimit > 0 {
+                                    ForEach(Array(filteredTV(from: result).prefix(turn.displayPreference.tvLimit))) { show in
                                         let isAdded = isTVInLibrary(show.id)
                                         mediaBubble(
                                             title: show.title,
@@ -88,6 +93,11 @@ struct DiscoveryView: View {
                                                 pendingTVForAddFeedback = show
                                                 showingAddTVShow = show
                                             },
+                                            secondaryActionTitle: isAdded ? nil : "Not this",
+                                            secondaryAction: {
+                                                memoryStore.markRejectedTV(show.id)
+                                                showToast("Noted. I’ll avoid \(show.title)")
+                                            },
                                             onTap: {
                                                 pendingTVForAddFeedback = show
                                                 showingAddTVShow = show
@@ -97,9 +107,9 @@ struct DiscoveryView: View {
                                 }
 
                                 if let result = turn.result,
-                                   result.recommendations.isEmpty,
-                                   result.tvRecommendations.isEmpty {
-                                    assistantBubble("I could not find confident picks yet. Add one concrete cue like topic, format, or fiction/non-fiction.")
+                                   filteredMovies(from: result).isEmpty,
+                                   filteredTV(from: result).isEmpty {
+                                    assistantBubble("I couldn't find good matches with those constraints. Try changing format, vibe, or one core keyword.")
                                 }
                             }
 
@@ -241,8 +251,8 @@ struct DiscoveryView: View {
         guard !message.isEmpty else { return }
         draftQuery = ""
 
-        let plan = await planTurn(for: message)
-        applyPlan(plan)
+        let plan = await intentService.planTurn(message: message, state: conversationState)
+        conversationState = intentService.apply(plan: plan, to: conversationState)
 
         var turn = DiscoveryChatTurn(
             userText: message,
@@ -254,14 +264,15 @@ struct DiscoveryView: View {
 
         isSearching = true
 
-        let effectiveQuery = conversationState.effectiveQuery
         let discovery = await DiscoveryEngine.shared.discover(
-            interest: effectiveQuery,
+            interest: intentService.effectiveQuery(for: conversationState),
             userMovies: movies,
             userTVShows: tvShows
         )
 
-        turn.assistantSummary = assistantSummary(for: plan)
+        turn.assistantSummary = plan.assistantLine?.isEmpty == false
+            ? plan.assistantLine
+            : intentService.fallbackAssistantSummary(plan: plan, state: conversationState)
         turn.result = discovery
 
         if let lastIndex = turns.indices.last {
@@ -271,338 +282,22 @@ struct DiscoveryView: View {
         isSearching = false
     }
 
-    private func normalizedIntentText(_ text: String) -> String {
-        text.lowercased()
-            .replacingOccurrences(of: "-", with: " ")
-            .replacingOccurrences(of: #"[^\p{L}\p{N}\s]"#, with: " ", options: .regularExpression)
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+    private func filteredMovies(from result: DiscoveryResult) -> [TMDBMovie] {
+        let rejected = memoryStore.rejectedMovieIDs
+        return result.recommendations.filter { !rejected.contains($0.id) }
     }
 
-    private func containsAny(_ text: String, terms: [String]) -> Bool {
-        terms.contains { text.contains($0) }
-    }
-
-    private func planTurn(for message: String) async -> DiscoveryTurnPlan {
-        if let aiPlan = await planTurnWithLLM(for: message) {
-            return aiPlan
-        }
-        return planTurnHeuristic(for: message)
-    }
-
-    private func planTurnHeuristic(for message: String) -> DiscoveryTurnPlan {
-        let normalized = normalizedIntentText(message)
-        let wantsMore = containsAny(normalized, terms: [
-            "more", "another", "anything else", "similar", "keep going", "next", "additional"
-        ])
-        let resetRequested = containsAny(normalized, terms: ["reset", "start over", "new chat", "clear chat"])
-
-        let wantsTV = containsAny(normalized, terms: ["tv", "show", "shows", "series"])
-        let wantsMovies = containsAny(normalized, terms: ["movie", "movies", "film", "films"])
-
-        let mediaOverride: DiscoveryConversationState.MediaMode?
-        if wantsTV && !wantsMovies {
-            mediaOverride = .tvOnly
-        } else if wantsMovies && !wantsTV {
-            mediaOverride = .movieOnly
-        } else if containsAny(normalized, terms: ["both", "either", "any format", "anything"]) {
-            mediaOverride = .any
-        } else {
-            mediaOverride = nil
-        }
-
-        let documentaryOnly: Bool?
-        let fictionPreference: String?
-        if containsAny(normalized, terms: ["documentary", "documentaries", "docuseries", "non fiction", "non-fiction", "nonfiction"]) {
-            documentaryOnly = true
-            fictionPreference = "Non-Fiction"
-        } else if normalized.contains("fiction") {
-            documentaryOnly = false
-            fictionPreference = "Fiction"
-        } else {
-            documentaryOnly = nil
-            fictionPreference = nil
-        }
-
-        let metaOnly = isMetaOnlyMessage(normalized)
-        let explicitNewTopic = containsAny(normalized, terms: [
-            "switch to", "new topic", "let s talk about", "lets talk about", "what about", "how about"
-        ])
-        let standaloneTopic = isLikelyStandaloneTopic(normalized)
-
-        let topicAction: DiscoveryTurnPlan.TopicAction
-        let topicText: String?
-        let refinementText: String?
-        if resetRequested {
-            topicAction = .keep
-            topicText = nil
-            refinementText = nil
-        } else if conversationState.topic == nil || explicitNewTopic || (standaloneTopic && !wantsMore) {
-            topicAction = .startNew
-            topicText = extractTopicText(from: message)
-            refinementText = nil
-        } else if metaOnly {
-            topicAction = .keep
-            topicText = nil
-            refinementText = nil
-        } else {
-            topicAction = .refine
-            topicText = nil
-            refinementText = extractTopicText(from: message)
-        }
-
-        let effectiveMode = mediaOverride ?? conversationState.mediaMode
-        let display: TurnDisplayPreference
-        switch effectiveMode {
-        case .movieOnly:
-            display = TurnDisplayPreference(movieLimit: wantsMore ? 4 : 2, tvLimit: 0)
-        case .tvOnly:
-            display = TurnDisplayPreference(movieLimit: 0, tvLimit: wantsMore ? 4 : 2)
-        case .any:
-            display = wantsMore
-                ? TurnDisplayPreference(movieLimit: 2, tvLimit: 2)
-                : TurnDisplayPreference(movieLimit: 1, tvLimit: 1)
-        }
-
-        return DiscoveryTurnPlan(
-            resetRequested: resetRequested,
-            topicAction: topicAction,
-            topicText: topicText,
-            refinementText: refinementText,
-            mediaModeOverride: mediaOverride,
-            documentaryOnlyOverride: documentaryOnly,
-            fictionPreferenceOverride: fictionPreference,
-            wantsMore: wantsMore,
-            displayPreference: display,
-            assistantLine: nil
-        )
-    }
-
-    private func planTurnWithLLM(for message: String) async -> DiscoveryTurnPlan? {
-        let currentTopic = conversationState.topic ?? ""
-        let refinements = conversationState.refinements.joined(separator: " | ")
-        let mediaMode: String
-        switch conversationState.mediaMode {
-        case .any: mediaMode = "any"
-        case .movieOnly: mediaMode = "movieOnly"
-        case .tvOnly: mediaMode = "tvOnly"
-        }
-
-        let prompt = """
-        You are a planner for a media discovery chat assistant.
-        Convert the user's latest message into STRICT JSON for app logic.
-
-        Current conversation state:
-        - topic: "\(currentTopic)"
-        - refinements: "\(refinements)"
-        - media_mode: "\(mediaMode)"
-        - documentary_only: \(conversationState.documentaryOnly ? "true" : "false")
-        - fiction_preference: "\(conversationState.fictionPreference ?? "any")"
-
-        Latest user message:
-        "\(message)"
-
-        Rules:
-        1) If user asks for "more tv suggestions" (or similar), this is a REFINE, not a new topic.
-        2) "more", "another", "anything else" should usually keep topic and increase counts.
-        3) For format requests, set media_mode_override to movieOnly or tvOnly.
-        4) For documentary/non-fiction requests, set documentary_only_override=true.
-        5) assistant_line must sound natural and concise.
-        6) Output JSON only, no prose.
-
-        Output schema:
-        {
-          "reset_requested": bool,
-          "topic_action": "startNew" | "refine" | "keep",
-          "topic_text": string | null,
-          "refinement_text": string | null,
-          "media_mode_override": "any" | "movieOnly" | "tvOnly" | null,
-          "documentary_only_override": bool | null,
-          "fiction_preference_override": "Fiction" | "Non-Fiction" | null,
-          "wants_more": bool,
-          "movie_count": int,
-          "tv_count": int,
-          "assistant_line": string
-        }
-        """
-
-        guard let json = await callOllamaForJSON(prompt: prompt),
-              let parsed = parseTurnPlanJSON(json) else {
-            return nil
-        }
-
-        var movieLimit = min(max(parsed.movieCount, 0), 6)
-        var tvLimit = min(max(parsed.tvCount, 0), 6)
-        if movieLimit == 0 && tvLimit == 0 {
-            switch parsed.mediaModeOverride ?? conversationState.mediaMode {
-            case .movieOnly:
-                movieLimit = parsed.wantsMore ? 4 : 2
-            case .tvOnly:
-                tvLimit = parsed.wantsMore ? 4 : 2
-            case .any:
-                movieLimit = parsed.wantsMore ? 2 : 1
-                tvLimit = parsed.wantsMore ? 2 : 1
-            }
-        }
-
-        return DiscoveryTurnPlan(
-            resetRequested: parsed.resetRequested,
-            topicAction: parsed.topicAction,
-            topicText: parsed.topicText,
-            refinementText: parsed.refinementText,
-            mediaModeOverride: parsed.mediaModeOverride,
-            documentaryOnlyOverride: parsed.documentaryOnlyOverride,
-            fictionPreferenceOverride: parsed.fictionPreferenceOverride,
-            wantsMore: parsed.wantsMore,
-            displayPreference: TurnDisplayPreference(movieLimit: movieLimit, tvLimit: tvLimit),
-            assistantLine: parsed.assistantLine
-        )
-    }
-
-    private func callOllamaForJSON(prompt: String) async -> String? {
-        guard let url = URL(string: "http://localhost:11434/api/generate") else { return nil }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let body: [String: Any] = [
-            "model": "llama3.2",
-            "prompt": prompt,
-            "stream": false,
-            "format": "json",
-            "options": [
-                "temperature": 0.1
-            ]
-        ]
-
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (data, _) = try await URLSession.shared.data(for: request)
-            let envelope = try JSONDecoder().decode(OllamaEnvelope.self, from: data)
-            return envelope.response
-        } catch {
-            return nil
-        }
-    }
-
-    private func parseTurnPlanJSON(_ json: String) -> ParsedTurnPlan? {
-        let body = extractJSONObject(from: json)
-        guard let data = body.data(using: .utf8),
-              let decoded = try? JSONDecoder().decode(ParsedTurnPlanJSON.self, from: data) else {
-            return nil
-        }
-        return decoded.toParsedPlan()
-    }
-
-    private func extractJSONObject(from text: String) -> String {
-        guard let start = text.firstIndex(of: "{"),
-              let end = text.lastIndex(of: "}") else {
-            return text
-        }
-        return String(text[start...end])
-    }
-
-    private func applyPlan(_ plan: DiscoveryTurnPlan) {
-        if plan.resetRequested {
-            conversationState = DiscoveryConversationState()
-            return
-        }
-
-        if let mode = plan.mediaModeOverride {
-            conversationState.mediaMode = mode
-        }
-        if let documentaryOnly = plan.documentaryOnlyOverride {
-            conversationState.documentaryOnly = documentaryOnly
-        }
-        if let fictionPref = plan.fictionPreferenceOverride {
-            conversationState.fictionPreference = fictionPref
-        }
-
-        switch plan.topicAction {
-        case .startNew:
-            conversationState.topic = plan.topicText
-            conversationState.refinements.removeAll()
-        case .refine:
-            if let refinement = plan.refinementText, !refinement.isEmpty {
-                conversationState.refinements.append(refinement)
-                if conversationState.refinements.count > 4 {
-                    conversationState.refinements = Array(conversationState.refinements.suffix(4))
-                }
-            }
-        case .keep:
-            break
-        }
-    }
-
-    private func assistantSummary(for plan: DiscoveryTurnPlan) -> String {
-        if let line = plan.assistantLine, !line.isEmpty {
-            return line
-        }
-        if plan.resetRequested {
-            return "Reset complete. Tell me what you want next."
-        }
-
-        if plan.wantsMore {
-            switch conversationState.mediaMode {
-            case .movieOnly: return "Great, here are more movie picks."
-            case .tvOnly: return "Great, here are more TV picks."
-            case .any: return "Great, here are a few more strong picks."
-            }
-        }
-
-        if conversationState.documentaryOnly {
-            return "Got it. I’ll keep this strictly documentary."
-        }
-
-        switch plan.topicAction {
-        case .startNew:
-            if let topic = conversationState.topic, !topic.isEmpty {
-                return "Got it. I’m now focusing on \(topic)."
-            }
-            return "Got it. I’m ready for your topic."
-        case .refine:
-            if let refinement = plan.refinementText, !refinement.isEmpty {
-                return "Perfect. I refined the picks based on “\(refinement)”."
-            }
-            return "Perfect. I refined the picks."
-        case .keep:
-            switch conversationState.mediaMode {
-            case .movieOnly: return "Got it, I’ll focus on movies."
-            case .tvOnly: return "Got it, I’ll focus on TV."
-            case .any: return "Got it. Here are the best matches."
-            }
-        }
-    }
-
-    private func extractTopicText(from message: String) -> String {
-        message.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func isMetaOnlyMessage(_ normalized: String) -> Bool {
-        let metaTokens: Set<String> = [
-            "more", "another", "anything", "else", "similar", "keep", "going",
-            "suggestion", "suggestions", "tv", "show", "shows", "series",
-            "movie", "movies", "film", "films", "please", "some", "give", "me", "can", "you"
-        ]
-        let tokens = normalized.split(separator: " ").map(String.init)
-        guard !tokens.isEmpty else { return true }
-        return tokens.allSatisfy { metaTokens.contains($0) }
-    }
-
-    private func isLikelyStandaloneTopic(_ normalized: String) -> Bool {
-        if containsAny(normalized, terms: ["more", "another", "similar", "like this", "keep going"]) {
-            return false
-        }
-        let tokens = normalized.split(separator: " ")
-        return !tokens.isEmpty && tokens.count <= 6
+    private func filteredTV(from result: DiscoveryResult) -> [TMDBTVShow] {
+        let rejected = memoryStore.rejectedTVIDs
+        return result.tvRecommendations.filter { !rejected.contains($0.id) }
     }
 
     private func isMovieInLibrary(_ tmdbID: Int) -> Bool {
-        addedMovieIDs.contains(tmdbID) || movies.contains(where: { $0.tmdbID == tmdbID })
+        memoryStore.acceptedMovieIDs.contains(tmdbID) || movies.contains(where: { $0.tmdbID == tmdbID })
     }
 
     private func isTVInLibrary(_ tmdbID: Int) -> Bool {
-        addedTVIDs.contains(tmdbID) || tvShows.contains(where: { $0.tmdbID == tmdbID })
+        memoryStore.acceptedTVIDs.contains(tmdbID) || tvShows.contains(where: { $0.tmdbID == tmdbID })
     }
 
     private func handleMovieSheetDismiss() {
@@ -610,9 +305,7 @@ struct DiscoveryView: View {
         defer { pendingMovieForAddFeedback = nil }
 
         guard movies.contains(where: { $0.tmdbID == candidate.id }) else { return }
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) {
-            addedMovieIDs.insert(candidate.id)
-        }
+        memoryStore.markAcceptedMovie(candidate.id)
         showToast("Added \(candidate.title)")
     }
 
@@ -621,9 +314,7 @@ struct DiscoveryView: View {
         defer { pendingTVForAddFeedback = nil }
 
         guard tvShows.contains(where: { $0.tmdbID == candidate.id }) else { return }
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) {
-            addedTVIDs.insert(candidate.id)
-        }
+        memoryStore.markAcceptedTV(candidate.id)
         showToast("Added \(candidate.title)")
     }
 
@@ -643,7 +334,7 @@ struct DiscoveryView: View {
 
     private func resetConversation() {
         turns.removeAll()
-        conversationState = DiscoveryConversationState()
+        conversationState = ChatConversationState()
         draftQuery = ""
         toastMessage = nil
     }
@@ -696,6 +387,8 @@ struct DiscoveryView: View {
         actionTitle: String?,
         isAdded: Bool = false,
         action: (() -> Void)?,
+        secondaryActionTitle: String?,
+        secondaryAction: (() -> Void)?,
         onTap: (() -> Void)?
     ) -> some View {
         HStack(alignment: .top, spacing: 10) {
@@ -729,24 +422,29 @@ struct DiscoveryView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
 
-                if let actionTitle, let action {
-                    Button(actionTitle) {
-                        action()
-                    }
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(isAdded ? Color.green.opacity(0.16) : appBlue.opacity(0.14))
-                    .foregroundStyle(isAdded ? Color.green : appBlue)
-                    .clipShape(Capsule())
-                    .overlay(alignment: .trailing) {
-                        if isAdded {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.caption2)
-                                .foregroundStyle(.green)
-                                .offset(x: 7, y: -10)
-                                .symbolEffect(.bounce, value: isAdded)
+                HStack(spacing: 8) {
+                    if let actionTitle, let action {
+                        Button(actionTitle) {
+                            action()
                         }
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(isAdded ? Color.green.opacity(0.16) : appBlue.opacity(0.14))
+                        .foregroundStyle(isAdded ? Color.green : appBlue)
+                        .clipShape(Capsule())
+                    }
+
+                    if let secondaryActionTitle, let secondaryAction {
+                        Button(secondaryActionTitle) {
+                            secondaryAction()
+                        }
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color(uiColor: .tertiarySystemBackground))
+                        .foregroundStyle(.secondary)
+                        .clipShape(Capsule())
                     }
                 }
             }
@@ -790,169 +488,7 @@ private struct DiscoveryChatTurn: Identifiable {
     let userText: String
     var assistantSummary: String?
     var result: DiscoveryResult?
-    var displayPreference: TurnDisplayPreference = TurnDisplayPreference(movieLimit: 1, tvLimit: 1)
-}
-
-private struct TurnDisplayPreference {
-    let movieLimit: Int
-    let tvLimit: Int
-}
-
-private struct DiscoveryTurnPlan {
-    enum TopicAction {
-        case startNew
-        case refine
-        case keep
-    }
-
-    let resetRequested: Bool
-    let topicAction: TopicAction
-    let topicText: String?
-    let refinementText: String?
-    let mediaModeOverride: DiscoveryConversationState.MediaMode?
-    let documentaryOnlyOverride: Bool?
-    let fictionPreferenceOverride: String?
-    let wantsMore: Bool
-    let displayPreference: TurnDisplayPreference
-    let assistantLine: String?
-}
-
-private struct ParsedTurnPlan {
-    let resetRequested: Bool
-    let topicAction: DiscoveryTurnPlan.TopicAction
-    let topicText: String?
-    let refinementText: String?
-    let mediaModeOverride: DiscoveryConversationState.MediaMode?
-    let documentaryOnlyOverride: Bool?
-    let fictionPreferenceOverride: String?
-    let wantsMore: Bool
-    let movieCount: Int
-    let tvCount: Int
-    let assistantLine: String?
-}
-
-private struct ParsedTurnPlanJSON: Decodable {
-    let resetRequested: Bool?
-    let topicAction: String?
-    let topicText: String?
-    let refinementText: String?
-    let mediaModeOverride: String?
-    let documentaryOnlyOverride: Bool?
-    let fictionPreferenceOverride: String?
-    let wantsMore: Bool?
-    let movieCount: Int?
-    let tvCount: Int?
-    let assistantLine: String?
-
-    enum CodingKeys: String, CodingKey {
-        case resetRequested = "reset_requested"
-        case topicAction = "topic_action"
-        case topicText = "topic_text"
-        case refinementText = "refinement_text"
-        case mediaModeOverride = "media_mode_override"
-        case documentaryOnlyOverride = "documentary_only_override"
-        case fictionPreferenceOverride = "fiction_preference_override"
-        case wantsMore = "wants_more"
-        case movieCount = "movie_count"
-        case tvCount = "tv_count"
-        case assistantLine = "assistant_line"
-    }
-
-    func toParsedPlan() -> ParsedTurnPlan {
-        let action: DiscoveryTurnPlan.TopicAction
-        switch (topicAction ?? "").lowercased() {
-        case "startnew", "new", "start_new":
-            action = .startNew
-        case "refine":
-            action = .refine
-        default:
-            action = .keep
-        }
-
-        let mode: DiscoveryConversationState.MediaMode?
-        switch (mediaModeOverride ?? "").lowercased() {
-        case "movieonly", "movie_only":
-            mode = .movieOnly
-        case "tvonly", "tv_only":
-            mode = .tvOnly
-        case "any":
-            mode = .any
-        default:
-            mode = nil
-        }
-
-        let fictionPref: String?
-        switch (fictionPreferenceOverride ?? "").lowercased() {
-        case "fiction":
-            fictionPref = "Fiction"
-        case "non-fiction", "non fiction", "nonfiction":
-            fictionPref = "Non-Fiction"
-        default:
-            fictionPref = nil
-        }
-
-        return ParsedTurnPlan(
-            resetRequested: resetRequested ?? false,
-            topicAction: action,
-            topicText: topicText?.trimmingCharacters(in: .whitespacesAndNewlines),
-            refinementText: refinementText?.trimmingCharacters(in: .whitespacesAndNewlines),
-            mediaModeOverride: mode,
-            documentaryOnlyOverride: documentaryOnlyOverride,
-            fictionPreferenceOverride: fictionPref,
-            wantsMore: wantsMore ?? false,
-            movieCount: movieCount ?? 1,
-            tvCount: tvCount ?? 1,
-            assistantLine: assistantLine?.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
-    }
-}
-
-private struct OllamaEnvelope: Decodable {
-    let response: String
-}
-
-private struct DiscoveryConversationState {
-    enum MediaMode {
-        case any
-        case movieOnly
-        case tvOnly
-    }
-
-    var topic: String? = nil
-    var refinements: [String] = []
-    var documentaryOnly = false
-    var fictionPreference: String? = nil
-    var mediaMode: MediaMode = .any
-
-    var effectiveQuery: String {
-        var parts: [String] = []
-        if let topic, !topic.isEmpty {
-            parts.append(topic)
-        }
-
-        if !refinements.isEmpty {
-            parts.append(contentsOf: refinements.map { "refine: \($0)" })
-        }
-
-        if documentaryOnly {
-            parts.append("documentary only")
-        }
-
-        if let fictionPreference {
-            parts.append("preference: \(fictionPreference)")
-        }
-
-        switch mediaMode {
-        case .movieOnly:
-            parts.append("movies only")
-        case .tvOnly:
-            parts.append("tv shows only")
-        case .any:
-            break
-        }
-
-        return parts.joined(separator: " | ")
-    }
+    var displayPreference: ChatDisplayPreference = ChatDisplayPreference(movieLimit: 1, tvLimit: 1)
 }
 
 #Preview {
