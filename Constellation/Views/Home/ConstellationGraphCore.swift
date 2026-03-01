@@ -1,24 +1,26 @@
 import SwiftUI
 
-struct GraphData {
-    let nodes: [GraphNode]
-    let edges: [GraphEdge]
+/// Shared graph domain models, enums, and helper filtering logic.
+/// Kept renderer-agnostic so both Home (3D preview) and immersive (D3) can reuse it.
+struct ConstellationGraphData {
+    let nodes: [ConstellationGraphNode]
+    let edges: [ConstellationGraphEdge]
     let positions: [String: CGPoint]
 }
 
-struct GraphNode: Identifiable {
+struct ConstellationGraphNode: Identifiable {
     let id: String
     let title: String
-    let kind: GraphNodeKind
+    let kind: ConstellationGraphNodeKind
     let reference: String?
 }
 
-struct GraphEdge: Identifiable {
+struct ConstellationGraphEdge: Identifiable {
     let id: String
     let fromID: String
     let toID: String
     let weight: Int
-    let source: GraphEdgeSource
+    let source: ConstellationGraphEdgeSource
     
     var baseColor: Color {
         switch source {
@@ -57,12 +59,12 @@ struct GraphEdge: Identifiable {
     }
 }
 
-struct EdgeAggregate {
+struct ConstellationGraphEdgeAggregate {
     var weight: Int
-    var source: GraphEdgeSource
+    var source: ConstellationGraphEdgeSource
 }
 
-enum GraphEdgeSource {
+enum ConstellationGraphEdgeSource {
     case theme
     case collection
     case hybrid
@@ -71,7 +73,7 @@ enum GraphEdgeSource {
         self == .collection || self == .hybrid
     }
     
-    func merged(with other: GraphEdgeSource) -> GraphEdgeSource {
+    func merged(with other: ConstellationGraphEdgeSource) -> ConstellationGraphEdgeSource {
         if self == other { return self }
         return .hybrid
     }
@@ -85,7 +87,7 @@ enum GraphEdgeSource {
     }
 }
 
-enum GraphNodeKind: Hashable {
+enum ConstellationGraphNodeKind: Hashable {
     case movie
     case tvShow
     case theme
@@ -139,7 +141,7 @@ enum GraphNodeKind: Hashable {
     }
 }
 
-enum GraphFilter: CaseIterable {
+enum ConstellationGraphFilter: CaseIterable {
     case all
     case movies
     case tvShows
@@ -154,7 +156,7 @@ enum GraphFilter: CaseIterable {
         }
     }
     
-    var visibleKinds: Set<GraphNodeKind> {
+    var visibleKinds: Set<ConstellationGraphNodeKind> {
         switch self {
         case .all: return [.movie, .tvShow, .theme]
         case .movies: return [.movie, .theme]
@@ -164,7 +166,7 @@ enum GraphFilter: CaseIterable {
     }
 }
 
-enum GraphDensityMode: CaseIterable {
+enum ConstellationGraphDensityMode: CaseIterable {
     case simple
     case detailed
     
@@ -176,7 +178,7 @@ enum GraphDensityMode: CaseIterable {
     }
 }
 
-enum GraphLabelDensity: CaseIterable {
+enum ConstellationGraphLabelDensity: CaseIterable {
     case low
     case medium
     case high
@@ -198,14 +200,14 @@ enum GraphLabelDensity: CaseIterable {
     }
 }
 
-enum GraphFilterToken {
+enum ConstellationGraphFilterToken {
     static let all = "__all__"
 }
 
-func applyGraphFilter(nodes: [GraphNode], edges: [GraphEdge], filter: GraphFilter) -> (nodes: [GraphNode], edges: [GraphEdge]) {
+func applyConstellationGraphFilter(nodes: [ConstellationGraphNode], edges: [ConstellationGraphEdge], filter: ConstellationGraphFilter) -> (nodes: [ConstellationGraphNode], edges: [ConstellationGraphEdge]) {
     let nodeByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
     
-    func filtered(allowedIDs: Set<String>) -> (nodes: [GraphNode], edges: [GraphEdge]) {
+    func filtered(allowedIDs: Set<String>) -> (nodes: [ConstellationGraphNode], edges: [ConstellationGraphEdge]) {
         let filteredNodes = nodes.filter { allowedIDs.contains($0.id) }
         let filteredEdges = edges.filter { allowedIDs.contains($0.fromID) && allowedIDs.contains($0.toID) }
         return (filteredNodes, filteredEdges)
@@ -252,19 +254,8 @@ func applyGraphFilter(nodes: [GraphNode], edges: [GraphEdge], filter: GraphFilte
     }
 }
 
-struct ThemeSelection: Identifiable {
+struct ConstellationThemeSelection: Identifiable {
     let id: String
-}
-
-struct GraphAnimationTimeKey: EnvironmentKey {
-    static let defaultValue: TimeInterval = 0
-}
-
-extension EnvironmentValues {
-    var graphAnimationTime: TimeInterval {
-        get { self[GraphAnimationTimeKey.self] }
-        set { self[GraphAnimationTimeKey.self] = newValue }
-    }
 }
 
 extension String {

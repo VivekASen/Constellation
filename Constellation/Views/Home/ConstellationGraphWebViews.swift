@@ -1,9 +1,12 @@
 import SwiftUI
 import WebKit
 
+/// Web-backed graph renderers:
+/// - Home 3D rotating preview canvas
+/// - Immersive D3 force-directed graph with interactions and effects
 struct Constellation3DPreviewWebView: UIViewRepresentable {
-    let nodes: [GraphNode]
-    let edges: [GraphEdge]
+    let nodes: [ConstellationGraphNode]
+    let edges: [ConstellationGraphEdge]
     @Binding var selectedNodeID: String?
     let resetToken: Int
     let onOpenNode: (String) -> Void
@@ -58,7 +61,7 @@ struct Constellation3DPreviewWebView: UIViewRepresentable {
                     weight: $0.weight
                 )
             },
-            labelDensity: GraphLabelDensity.medium.d3Token
+            labelDensity: ConstellationGraphLabelDensity.medium.d3Token
         )
     }
     
@@ -466,11 +469,11 @@ struct Constellation3DPreviewWebView: UIViewRepresentable {
 }
 
 struct ConstellationD3WebView: UIViewRepresentable {
-    let nodes: [GraphNode]
-    let edges: [GraphEdge]
+    let nodes: [ConstellationGraphNode]
+    let edges: [ConstellationGraphEdge]
     @Binding var selectedNodeID: String?
     let resetToken: Int
-    let labelDensity: GraphLabelDensity
+    let labelDensity: ConstellationGraphLabelDensity
     let onOpenNode: (String) -> Void
     
     func makeCoordinator() -> Coordinator {

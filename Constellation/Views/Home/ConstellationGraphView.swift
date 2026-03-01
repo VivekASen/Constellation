@@ -7,35 +7,37 @@
 
 import SwiftUI
 
+/// Main composition view for the Constellation graph experience.
+/// Home shows an independent 3D preview, while immersive mode exposes full filtering.
 struct ConstellationGraphView: View {
     let movies: [Movie]
     let tvShows: [TVShow]
     let collections: [ItemCollection]
     
     @State private var selectedNodeID: String?
-    @State private var filter: GraphFilter = .all
+    @State private var filter: ConstellationGraphFilter = .all
     @State private var showImmersiveMode = false
-    @State private var selectedThemeFilter: String = GraphFilterToken.all
-    @State private var selectedCollectionFilter: String = GraphFilterToken.all
-    @State private var densityMode: GraphDensityMode = .simple
-    @State private var labelDensity: GraphLabelDensity = .medium
+    @State private var selectedThemeFilter: String = ConstellationGraphFilterToken.all
+    @State private var selectedCollectionFilter: String = ConstellationGraphFilterToken.all
+    @State private var densityMode: ConstellationGraphDensityMode = .simple
+    @State private var labelDensity: ConstellationGraphLabelDensity = .medium
     @State private var homeResetToken: Int = 0
     
     @State private var selectedMovie: Movie?
     @State private var selectedTVShow: TVShow?
-    @State private var selectedTheme: ThemeSelection?
+    @State private var selectedTheme: ConstellationThemeSelection?
     
     var body: some View {
         let themeOptions = Array(Set(movies.flatMap(\.themes) + tvShows.flatMap(\.themes))).sorted()
         let collectionOptions = collections.sorted { $0.name < $1.name }
         
         let homeGraph = buildGraph(themeFilter: nil, collectionFilter: nil, densityMode: .detailed)
-        let homeGraphFiltered = applyGraphFilter(nodes: homeGraph.nodes, edges: homeGraph.edges, filter: .all)
+        let homeGraphFiltered = applyConstellationGraphFilter(nodes: homeGraph.nodes, edges: homeGraph.edges, filter: .all)
         let homeNodes = homeGraphFiltered.nodes
         let homeEdges = homeGraphFiltered.edges
         
-        let selectedTheme = selectedThemeFilter == GraphFilterToken.all ? nil : selectedThemeFilter
-        let selectedCollection = selectedCollectionFilter == GraphFilterToken.all ? nil : selectedCollectionFilter
+        let selectedTheme = selectedThemeFilter == ConstellationGraphFilterToken.all ? nil : selectedThemeFilter
+        let selectedCollection = selectedCollectionFilter == ConstellationGraphFilterToken.all ? nil : selectedCollectionFilter
         let immersiveGraph = buildGraph(themeFilter: selectedTheme, collectionFilter: selectedCollection, densityMode: densityMode)
         
         VStack(alignment: .leading, spacing: 12) {
@@ -154,7 +156,7 @@ struct ConstellationGraphView: View {
     }
     
     @ViewBuilder
-    private func selectedNodePanel(_ node: GraphNode) -> some View {
+    private func selectedNodePanel(_ node: ConstellationGraphNode) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(node.kind.icon)
@@ -181,7 +183,7 @@ struct ConstellationGraphView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
     
-    private func openNode(_ node: GraphNode) {
+    private func openNode(_ node: ConstellationGraphNode) {
         switch node.kind {
         case .movie:
             if let idString = node.reference, let id = UUID(uuidString: idString) {
@@ -193,12 +195,12 @@ struct ConstellationGraphView: View {
             }
         case .theme:
             if let theme = node.reference {
-                selectedTheme = ThemeSelection(id: theme)
+                selectedTheme = ConstellationThemeSelection(id: theme)
             }
         }
     }
     
-    private func buildGraph(themeFilter: String?, collectionFilter: String?, densityMode: GraphDensityMode) -> GraphData {
+    private func buildGraph(themeFilter: String?, collectionFilter: String?, densityMode: ConstellationGraphDensityMode) -> ConstellationGraphData {
         let recentMovieIDs = Set(movies.prefix(14).map { $0.id.uuidString })
         let recentShowIDs = Set(tvShows.prefix(14).map { $0.id.uuidString })
         let collectionMovieIDs = Set(collections.flatMap(\.movieIDs))
@@ -245,21 +247,21 @@ struct ConstellationGraphView: View {
                 .map(\.key)
         }
         
-        var nodes: [GraphNode] = []
-        var edgeMeta: [String: EdgeAggregate] = [:]
+        var nodes: [ConstellationGraphNode] = []
+        var edgeMeta: [String: ConstellationGraphEdgeAggregate] = [:]
         
         for movie in selectedMovies {
-            let node = GraphNode(id: "movie::\(movie.id.uuidString)", title: movie.title, kind: .movie, reference: movie.id.uuidString)
+            let node = ConstellationGraphNode(id: "movie::\(movie.id.uuidString)", title: movie.title, kind: .movie, reference: movie.id.uuidString)
             nodes.append(node)
         }
         
         for show in selectedShows {
-            let node = GraphNode(id: "show::\(show.id.uuidString)", title: show.title, kind: .tvShow, reference: show.id.uuidString)
+            let node = ConstellationGraphNode(id: "show::\(show.id.uuidString)", title: show.title, kind: .tvShow, reference: show.id.uuidString)
             nodes.append(node)
         }
         
         for theme in topThemes {
-            let node = GraphNode(id: "theme::\(theme)", title: theme, kind: .theme, reference: theme)
+            let node = ConstellationGraphNode(id: "theme::\(theme)", title: theme, kind: .theme, reference: theme)
             nodes.append(node)
         }
         
@@ -295,9 +297,9 @@ struct ConstellationGraphView: View {
             }
         }
         
-        let edges = edgeMeta.map { key, value -> GraphEdge in
+        let edges = edgeMeta.map { key, value -> ConstellationGraphEdge in
             let ids = key.split(separator: "|").map(String.init)
-            return GraphEdge(
+            return ConstellationGraphEdge(
                 id: key,
                 fromID: ids[0],
                 toID: ids[1],
@@ -322,7 +324,7 @@ struct ConstellationGraphView: View {
             collectionFilter: collectionFilter
         )
         
-        return GraphData(nodes: nodes, edges: finalEdges, positions: positions)
+        return ConstellationGraphData(nodes: nodes, edges: finalEdges, positions: positions)
     }
     
     private func resetViewport() {
@@ -336,17 +338,17 @@ struct ConstellationGraphView: View {
         return CGPoint(x: cos(angle) * radius, y: sin(angle) * radius)
     }
     
-    private func incrementEdge(fromID: String, toID: String, source: GraphEdgeSource, in storage: inout [String: EdgeAggregate]) {
+    private func incrementEdge(fromID: String, toID: String, source: ConstellationGraphEdgeSource, in storage: inout [String: ConstellationGraphEdgeAggregate]) {
         let key = fromID < toID ? "\(fromID)|\(toID)" : "\(toID)|\(fromID)"
-        var current = storage[key] ?? EdgeAggregate(weight: 0, source: source)
+        var current = storage[key] ?? ConstellationGraphEdgeAggregate(weight: 0, source: source)
         current.weight += 1
         current.source = current.source.merged(with: source)
         storage[key] = current
     }
     
     private func computeDynamicPositions(
-        nodes: [GraphNode],
-        edges: [GraphEdge],
+        nodes: [ConstellationGraphNode],
+        edges: [ConstellationGraphEdge],
         themeFilter: String?,
         collectionFilter: String?
     ) -> [String: CGPoint] {
@@ -417,7 +419,7 @@ struct ConstellationGraphView: View {
             return resolveNodeOverlaps(positions: positions, nodes: nodes)
         }
         
-        var byAnchor: [String: [GraphNode]] = [:]
+        var byAnchor: [String: [ConstellationGraphNode]] = [:]
         for item in media {
             let anchor = nearestThemeID(for: item.id, themes: themes, adjacency: adjacency) ?? "unassigned"
             byAnchor[anchor, default: []].append(item)
@@ -449,7 +451,7 @@ struct ConstellationGraphView: View {
         return resolveNodeOverlaps(positions: positions, nodes: nodes)
     }
     
-    private func buildAdjacency(edges: [GraphEdge]) -> [String: Set<String>] {
+    private func buildAdjacency(edges: [ConstellationGraphEdge]) -> [String: Set<String>] {
         var adjacency: [String: Set<String>] = [:]
         for edge in edges {
             adjacency[edge.fromID, default: []].insert(edge.toID)
@@ -458,7 +460,7 @@ struct ConstellationGraphView: View {
         return adjacency
     }
     
-    private func nearestThemeID(for mediaID: String, themes: [GraphNode], adjacency: [String: Set<String>]) -> String? {
+    private func nearestThemeID(for mediaID: String, themes: [ConstellationGraphNode], adjacency: [String: Set<String>]) -> String? {
         let neighborThemes = adjacency[mediaID, default: []]
             .filter { $0.hasPrefix("theme::") }
             .sorted()
@@ -474,7 +476,7 @@ struct ConstellationGraphView: View {
         return fraction
     }
 
-    private func resolveNodeOverlaps(positions: [String: CGPoint], nodes: [GraphNode]) -> [String: CGPoint] {
+    private func resolveNodeOverlaps(positions: [String: CGPoint], nodes: [ConstellationGraphNode]) -> [String: CGPoint] {
         var result = positions
         let kindByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0.kind) })
         let ids = result.keys.sorted()
@@ -576,31 +578,31 @@ private struct BrainPortalButton: View {
 }
 
 private struct ImmersiveConstellationView: View {
-    let graph: GraphData
-    @Binding var filter: GraphFilter
-    @Binding var labelDensity: GraphLabelDensity
-    @Binding var densityMode: GraphDensityMode
+    let graph: ConstellationGraphData
+    @Binding var filter: ConstellationGraphFilter
+    @Binding var labelDensity: ConstellationGraphLabelDensity
+    @Binding var densityMode: ConstellationGraphDensityMode
     @Binding var selectedThemeFilter: String
     @Binding var selectedCollectionFilter: String
     let themeOptions: [String]
     let collectionOptions: [ItemCollection]
     let onClose: () -> Void
-    let onOpenNode: (GraphNode) -> Void
+    let onOpenNode: (ConstellationGraphNode) -> Void
     
     @State private var selectedNodeID: String?
     @State private var webResetToken: Int = 0
     
-    private var visibleNodes: [GraphNode] {
-        applyGraphFilter(nodes: graph.nodes, edges: graph.edges, filter: filter).nodes
+    private var visibleNodes: [ConstellationGraphNode] {
+        applyConstellationGraphFilter(nodes: graph.nodes, edges: graph.edges, filter: filter).nodes
     }
     
-    private var visibleEdges: [GraphEdge] {
-        applyGraphFilter(nodes: graph.nodes, edges: graph.edges, filter: filter).edges
+    private var visibleEdges: [ConstellationGraphEdge] {
+        applyConstellationGraphFilter(nodes: graph.nodes, edges: graph.edges, filter: filter).edges
     }
     
     var body: some View {
-        let selectedTheme = selectedThemeFilter == GraphFilterToken.all ? nil : selectedThemeFilter
-        let selectedCollection = selectedCollectionFilter == GraphFilterToken.all ? nil : selectedCollectionFilter
+        let selectedTheme = selectedThemeFilter == ConstellationGraphFilterToken.all ? nil : selectedThemeFilter
+        let selectedCollection = selectedCollectionFilter == ConstellationGraphFilterToken.all ? nil : selectedCollectionFilter
         
         ZStack {
             LinearGradient(
@@ -663,7 +665,7 @@ private struct ImmersiveConstellationView: View {
                 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(GraphFilter.allCases, id: \.self) { option in
+                        ForEach(ConstellationGraphFilter.allCases, id: \.self) { option in
                             Button(option.title) {
                                 filter = option
                                 selectedNodeID = nil
@@ -681,7 +683,7 @@ private struct ImmersiveConstellationView: View {
                 }
                 
                 Picker("Density", selection: $densityMode) {
-                    ForEach(GraphDensityMode.allCases, id: \.self) { mode in
+                    ForEach(ConstellationGraphDensityMode.allCases, id: \.self) { mode in
                         Text(mode.title).tag(mode)
                     }
                 }
@@ -690,7 +692,7 @@ private struct ImmersiveConstellationView: View {
                 .padding(.top, 8)
                 
                 Picker("Labels", selection: $labelDensity) {
-                    ForEach(GraphLabelDensity.allCases, id: \.self) { mode in
+                    ForEach(ConstellationGraphLabelDensity.allCases, id: \.self) { mode in
                         Text(mode.title).tag(mode)
                     }
                 }
@@ -701,7 +703,7 @@ private struct ImmersiveConstellationView: View {
                 HStack(spacing: 8) {
                     Menu {
                         Picker("Theme", selection: $selectedThemeFilter) {
-                            Text("All Themes").tag(GraphFilterToken.all)
+                            Text("All Themes").tag(ConstellationGraphFilterToken.all)
                             ForEach(themeOptions, id: \.self) { theme in
                                 Text(theme.replacingOccurrences(of: "-", with: " ").capitalized).tag(theme)
                             }
@@ -721,7 +723,7 @@ private struct ImmersiveConstellationView: View {
                     
                     Menu {
                         Picker("Collection", selection: $selectedCollectionFilter) {
-                            Text("All Collections").tag(GraphFilterToken.all)
+                            Text("All Collections").tag(ConstellationGraphFilterToken.all)
                             ForEach(collectionOptions, id: \.id) { collection in
                                 Text(collection.name).tag(collection.id.uuidString)
                             }
@@ -799,7 +801,7 @@ private struct StarfieldBackground: View {
 }
 
 private struct VisibleNodeLegend: View {
-    let nodes: [GraphNode]
+    let nodes: [ConstellationGraphNode]
     @Binding var selectedNodeID: String?
     
     var body: some View {
