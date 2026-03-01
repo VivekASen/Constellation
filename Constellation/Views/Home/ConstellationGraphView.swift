@@ -46,7 +46,7 @@ struct ConstellationGraphView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Constellation Graph")
                         .font(.headline)
-                    Text("Tap the brain to dive into immersive mode")
+                    Text("Tap the brain to open immersive mode with filters and deep exploration")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -67,18 +67,6 @@ struct ConstellationGraphView: View {
                 BrainPortalButton {
                     showImmersiveMode = true
                 }
-            }
-            
-            HStack {
-                Text("Use immersive mode for filters and deep exploration.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Open Full Constellation") {
-                    showImmersiveMode = true
-                }
-                .font(.caption.weight(.semibold))
-                .buttonStyle(.bordered)
             }
             
             GeometryReader { proxy in
