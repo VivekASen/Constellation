@@ -107,11 +107,6 @@ struct DiscoveryView: View {
                                     }
                                 }
 
-                                if let result = turn.result,
-                                   filteredMovies(from: result).isEmpty,
-                                   filteredTV(from: result).isEmpty {
-                                    assistantBubble("I couldn't find good matches with those constraints. Try changing format, vibe, or one core keyword.")
-                                }
                             }
 
                             if isSearching {
@@ -251,19 +246,25 @@ struct DiscoveryView: View {
         let message = rawMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
         draftQuery = ""
+        isSearching = true
+
+        turns.append(
+            DiscoveryChatTurn(
+                userText: message,
+                assistantSummary: nil,
+                result: nil,
+                displayPreference: ChatDisplayPreference(movieLimit: 1, tvLimit: 1)
+            )
+        )
+        guard let turnIndex = turns.indices.last else {
+            isSearching = false
+            return
+        }
 
         let plan = await intentService.planTurn(message: message, state: conversationState)
         conversationState = intentService.apply(plan: plan, to: conversationState)
-
-        var turn = DiscoveryChatTurn(
-            userText: message,
-            assistantSummary: nil,
-            result: nil,
-            displayPreference: plan.displayPreference
-        )
-        turns.append(turn)
-
-        isSearching = true
+        var turn = turns[turnIndex]
+        turn.displayPreference = plan.displayPreference
 
         let discovery = await DiscoveryEngine.shared.discover(
             interest: intentService.effectiveQuery(for: conversationState),
@@ -271,16 +272,23 @@ struct DiscoveryView: View {
             userTVShows: tvShows
         )
 
-        turn.assistantSummary = plan.assistantLine?.isEmpty == false
-            ? plan.assistantLine
-            : intentService.fallbackAssistantSummary(plan: plan, state: conversationState)
         turn.result = discovery
+        let hasCards = hasRenderableResults(in: discovery, display: plan.displayPreference)
+        turn.assistantSummary = hasCards
+            ? (plan.assistantLine?.isEmpty == false
+                ? plan.assistantLine
+                : intentService.fallbackAssistantSummary(plan: plan, state: conversationState))
+            : "I couldn't find good matches for that topic yet. Try adding one more anchor like era, format, or region."
 
-        if let lastIndex = turns.indices.last {
-            turns[lastIndex] = turn
-        }
+        turns[turnIndex] = turn
 
         isSearching = false
+    }
+
+    private func hasRenderableResults(in result: DiscoveryResult, display: ChatDisplayPreference) -> Bool {
+        let hasMovieCards = display.movieLimit > 0 && !Array(filteredMovies(from: result).prefix(display.movieLimit)).isEmpty
+        let hasTVCards = display.tvLimit > 0 && !Array(filteredTV(from: result).prefix(display.tvLimit)).isEmpty
+        return hasMovieCards || hasTVCards
     }
 
     private func filteredMovies(from result: DiscoveryResult) -> [TMDBMovie] {

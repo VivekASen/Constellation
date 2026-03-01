@@ -336,7 +336,10 @@ final class ChatIntentService {
     }
 
     private func containsAny(_ text: String, terms: [String]) -> Bool {
-        terms.contains { text.contains($0) }
+        terms.contains { term in
+            let pattern = "\\b" + NSRegularExpression.escapedPattern(for: term) + "\\b"
+            return text.range(of: pattern, options: .regularExpression) != nil
+        }
     }
 
     private func isMetaOnlyMessage(_ normalized: String) -> Bool {
@@ -366,6 +369,7 @@ final class ChatIntentService {
         let wantsTV = containsAny(normalized, terms: ["tv", "show", "shows", "series"])
         let wantsMovies = containsAny(normalized, terms: ["movie", "movies", "film", "films"])
         let metaOnly = isMetaOnlyMessage(normalized)
+        let standaloneTopic = isLikelyStandaloneTopic(normalized)
 
         var topicAction = plan.topicAction
         var topicText = plan.topicText
@@ -406,6 +410,8 @@ final class ChatIntentService {
             refinementText = "more options in the same style"
         }
 
+        let resolvedWantsMore = standaloneTopic ? false : (plan.wantsMore || wantsMore)
+
         return ChatTurnPlan(
             resetRequested: plan.resetRequested,
             topicAction: topicAction,
@@ -414,7 +420,7 @@ final class ChatIntentService {
             mediaModeOverride: mediaOverride,
             documentaryOnlyOverride: plan.documentaryOnlyOverride,
             fictionPreferenceOverride: plan.fictionPreferenceOverride,
-            wantsMore: plan.wantsMore || wantsMore,
+            wantsMore: resolvedWantsMore,
             displayPreference: ChatDisplayPreference(movieLimit: movieLimit, tvLimit: tvLimit),
             assistantLine: plan.assistantLine
         )
