@@ -11,6 +11,7 @@ struct Constellation3DPreviewWebView: UIViewRepresentable {
     let resetToken: Int
     let onOpenNode: (String) -> Void
     
+    // MARK: - UIViewRepresentable
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
@@ -73,11 +74,13 @@ struct Constellation3DPreviewWebView: UIViewRepresentable {
         private var setSelectedNode: (String?) -> Void = { _ in }
         private var openNode: (String) -> Void = { _ in }
         
+        // MARK: - Bindings
         func pushBindings(selectedNodeID: Binding<String?>, onOpenNode: @escaping (String) -> Void) {
             self.setSelectedNode = { selectedNodeID.wrappedValue = $0 }
             self.openNode = onOpenNode
         }
         
+        // MARK: - Graph Sync
         func initialHTML(payload: D3GraphPayload) -> String? {
             guard let json = payload.jsonString else { return nil }
             lastGraphJSON = json
@@ -104,6 +107,7 @@ struct Constellation3DPreviewWebView: UIViewRepresentable {
             }
         }
         
+        // MARK: - WKNavigationDelegate
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             didFinishLoad = true
             if let json = lastGraphJSON {
@@ -111,6 +115,7 @@ struct Constellation3DPreviewWebView: UIViewRepresentable {
             }
         }
         
+        // MARK: - WKScriptMessageHandler
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard let id = message.body as? String else { return }
             if message.name == "nodeTap" {
@@ -120,6 +125,7 @@ struct Constellation3DPreviewWebView: UIViewRepresentable {
             }
         }
         
+        // MARK: - HTML
         static let htmlTemplate = #"""
 <!doctype html>
 <html>
@@ -476,6 +482,7 @@ struct ConstellationD3WebView: UIViewRepresentable {
     let labelDensity: ConstellationGraphLabelDensity
     let onOpenNode: (String) -> Void
     
+    // MARK: - UIViewRepresentable
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
@@ -538,11 +545,13 @@ struct ConstellationD3WebView: UIViewRepresentable {
         private var setSelectedNode: (String?) -> Void = { _ in }
         private var openNode: (String) -> Void = { _ in }
         
+        // MARK: - Bindings
         func pushBindings(selectedNodeID: Binding<String?>, onOpenNode: @escaping (String) -> Void) {
             self.setSelectedNode = { selectedNodeID.wrappedValue = $0 }
             self.openNode = onOpenNode
         }
         
+        // MARK: - Graph Sync
         func initialHTML(payload: D3GraphPayload) -> String? {
             guard let json = payload.jsonString else { return nil }
             lastGraphJSON = json
@@ -570,6 +579,7 @@ struct ConstellationD3WebView: UIViewRepresentable {
             }
         }
         
+        // MARK: - WKNavigationDelegate
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             didFinishLoad = true
             if let json = lastGraphJSON {
@@ -577,6 +587,7 @@ struct ConstellationD3WebView: UIViewRepresentable {
             }
         }
         
+        // MARK: - WKScriptMessageHandler
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard let id = message.body as? String else { return }
             if message.name == "nodeTap" {
@@ -586,6 +597,7 @@ struct ConstellationD3WebView: UIViewRepresentable {
             }
         }
         
+        // MARK: - HTML
         static let htmlTemplate = #"""
 <!doctype html>
 <html>
@@ -854,6 +866,7 @@ struct D3GraphPayload: Codable {
     let links: [D3LinkPayload]
     let labelDensity: String
     
+    // MARK: - Encoding
     var jsonString: String? {
         let encoder = JSONEncoder()
         guard let data = try? encoder.encode(self), let string = String(data: data, encoding: .utf8) else { return nil }

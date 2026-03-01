@@ -22,6 +22,7 @@ struct ConstellationGraphEdge: Identifiable {
     let weight: Int
     let source: ConstellationGraphEdgeSource
     
+    // MARK: - Styling
     var baseColor: Color {
         switch source {
         case .theme:
@@ -92,6 +93,7 @@ enum ConstellationGraphNodeKind: Hashable {
     case tvShow
     case theme
     
+    // MARK: - Presentation
     var color: Color {
         switch self {
         case .movie: return .blue
@@ -183,6 +185,7 @@ enum ConstellationGraphLabelDensity: CaseIterable {
     case medium
     case high
     
+    // MARK: - Presentation
     var title: String {
         switch self {
         case .low: return "Labels: Low"
@@ -207,6 +210,7 @@ enum ConstellationGraphFilterToken {
 func applyConstellationGraphFilter(nodes: [ConstellationGraphNode], edges: [ConstellationGraphEdge], filter: ConstellationGraphFilter) -> (nodes: [ConstellationGraphNode], edges: [ConstellationGraphEdge]) {
     let nodeByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
     
+    // Preserve node/edge ordering while constraining to allowed node IDs.
     func filtered(allowedIDs: Set<String>) -> (nodes: [ConstellationGraphNode], edges: [ConstellationGraphEdge]) {
         let filteredNodes = nodes.filter { allowedIDs.contains($0.id) }
         let filteredEdges = edges.filter { allowedIDs.contains($0.fromID) && allowedIDs.contains($0.toID) }

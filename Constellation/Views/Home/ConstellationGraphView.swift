@@ -27,6 +27,7 @@ struct ConstellationGraphView: View {
     @State private var selectedTVShow: TVShow?
     @State private var selectedTheme: ConstellationThemeSelection?
     
+    // MARK: - Body
     var body: some View {
         let themeOptions = Array(Set(movies.flatMap(\.themes) + tvShows.flatMap(\.themes))).sorted()
         let collectionOptions = collections.sorted { $0.name < $1.name }
@@ -155,6 +156,7 @@ struct ConstellationGraphView: View {
         }
     }
     
+    // MARK: - UI Helpers
     @ViewBuilder
     private func selectedNodePanel(_ node: ConstellationGraphNode) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -183,6 +185,7 @@ struct ConstellationGraphView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
     
+    // MARK: - Actions
     private func openNode(_ node: ConstellationGraphNode) {
         switch node.kind {
         case .movie:
@@ -200,6 +203,7 @@ struct ConstellationGraphView: View {
         }
     }
     
+    // MARK: - Graph Construction
     private func buildGraph(themeFilter: String?, collectionFilter: String?, densityMode: ConstellationGraphDensityMode) -> ConstellationGraphData {
         let recentMovieIDs = Set(movies.prefix(14).map { $0.id.uuidString })
         let recentShowIDs = Set(tvShows.prefix(14).map { $0.id.uuidString })
@@ -327,6 +331,7 @@ struct ConstellationGraphView: View {
         return ConstellationGraphData(nodes: nodes, edges: finalEdges, positions: positions)
     }
     
+    // MARK: - Graph Math
     private func resetViewport() {
         selectedNodeID = nil
         homeResetToken += 1
@@ -548,6 +553,7 @@ private struct BrainPortalButton: View {
     let action: () -> Void
     @State private var pulse = false
     
+    // MARK: - Body
     var body: some View {
         Button(action: action) {
             ZStack {
@@ -592,14 +598,11 @@ private struct ImmersiveConstellationView: View {
     @State private var selectedNodeID: String?
     @State private var webResetToken: Int = 0
     
-    private var visibleNodes: [ConstellationGraphNode] {
-        applyConstellationGraphFilter(nodes: graph.nodes, edges: graph.edges, filter: filter).nodes
+    private var filteredGraph: (nodes: [ConstellationGraphNode], edges: [ConstellationGraphEdge]) {
+        applyConstellationGraphFilter(nodes: graph.nodes, edges: graph.edges, filter: filter)
     }
     
-    private var visibleEdges: [ConstellationGraphEdge] {
-        applyConstellationGraphFilter(nodes: graph.nodes, edges: graph.edges, filter: filter).edges
-    }
-    
+    // MARK: - Body
     var body: some View {
         let selectedTheme = selectedThemeFilter == ConstellationGraphFilterToken.all ? nil : selectedThemeFilter
         let selectedCollection = selectedCollectionFilter == ConstellationGraphFilterToken.all ? nil : selectedCollectionFilter
@@ -634,7 +637,7 @@ private struct ImmersiveConstellationView: View {
                     
                     Spacer()
                     
-                    if let selected = visibleNodes.first(where: { $0.id == selectedNodeID }) {
+                    if let selected = filteredGraph.nodes.first(where: { $0.id == selectedNodeID }) {
                         Button("Open") {
                             onOpenNode(selected)
                         }
@@ -746,13 +749,13 @@ private struct ImmersiveConstellationView: View {
                 
                 GeometryReader { _ in
                     ConstellationD3WebView(
-                        nodes: visibleNodes,
-                        edges: visibleEdges,
+                        nodes: filteredGraph.nodes,
+                        edges: filteredGraph.edges,
                         selectedNodeID: $selectedNodeID,
                         resetToken: webResetToken,
                         labelDensity: labelDensity,
                         onOpenNode: { nodeID in
-                            guard let node = visibleNodes.first(where: { $0.id == nodeID }) else { return }
+                            guard let node = filteredGraph.nodes.first(where: { $0.id == nodeID }) else { return }
                             onOpenNode(node)
                         }
                     )
@@ -766,6 +769,7 @@ private struct ImmersiveConstellationView: View {
         .foregroundStyle(.white)
     }
     
+    // MARK: - Actions
     private func resetViewport() {
         selectedNodeID = nil
         webResetToken += 1
@@ -779,6 +783,7 @@ private struct StarfieldBackground: View {
         return CGPoint(x: x, y: y)
     }
     
+    // MARK: - Body
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { timeline in
             Canvas { context, size in
@@ -804,6 +809,7 @@ private struct VisibleNodeLegend: View {
     let nodes: [ConstellationGraphNode]
     @Binding var selectedNodeID: String?
     
+    // MARK: - Body
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Visible Nodes")
