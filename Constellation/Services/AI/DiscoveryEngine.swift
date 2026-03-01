@@ -48,6 +48,12 @@ class DiscoveryEngine {
             tvRecommendationReasons: Dictionary(
                 uniqueKeysWithValues: recommendationResult.tvShows.map { ($0.show.id, $0.reasons.joined(separator: " • ")) }
             ),
+            movieRecommendationCoherence: Dictionary(
+                uniqueKeysWithValues: recommendationResult.movies.map { ($0.movie.id, $0.coherenceEvidence) }
+            ),
+            tvRecommendationCoherence: Dictionary(
+                uniqueKeysWithValues: recommendationResult.tvShows.map { ($0.show.id, $0.coherenceEvidence) }
+            ),
             followUpQuestions: questions,
             connections: findConnections(inMovies: movieMatches, tvShows: tvMatches)
         )
@@ -363,6 +369,8 @@ struct DiscoveryResult {
     let tvRecommendations: [TMDBTVShow]
     let movieRecommendationReasons: [Int: String]
     let tvRecommendationReasons: [Int: String]
+    let movieRecommendationCoherence: [Int: Double]
+    let tvRecommendationCoherence: [Int: Double]
     let followUpQuestions: [FollowUpQuestion]
     let connections: [Connection]
     

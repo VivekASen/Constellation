@@ -4,6 +4,7 @@ import SwiftData
 struct DiscoveryView: View {
     @Query private var movies: [Movie]
     @Query private var tvShows: [TVShow]
+    @AppStorage("recommend.coherenceThreshold") private var coherenceThreshold = 0.34
 
     @State private var draftQuery = ""
     @State private var isSearching = false
@@ -284,12 +285,20 @@ struct DiscoveryView: View {
 
     private func filteredMovies(from result: DiscoveryResult) -> [TMDBMovie] {
         let rejected = memoryStore.rejectedMovieIDs
-        return result.recommendations.filter { !rejected.contains($0.id) }
+        return result.recommendations.filter { movie in
+            guard !rejected.contains(movie.id) else { return false }
+            let coherence = result.movieRecommendationCoherence[movie.id] ?? 0
+            return coherence >= coherenceThreshold
+        }
     }
 
     private func filteredTV(from result: DiscoveryResult) -> [TMDBTVShow] {
         let rejected = memoryStore.rejectedTVIDs
-        return result.tvRecommendations.filter { !rejected.contains($0.id) }
+        return result.tvRecommendations.filter { show in
+            guard !rejected.contains(show.id) else { return false }
+            let coherence = result.tvRecommendationCoherence[show.id] ?? 0
+            return coherence >= coherenceThreshold
+        }
     }
 
     private func isMovieInLibrary(_ tmdbID: Int) -> Bool {

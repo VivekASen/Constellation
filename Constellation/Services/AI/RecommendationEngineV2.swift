@@ -8,6 +8,7 @@ final class RecommendationEngineV2 {
     private let minimumMovieVoteCount = 180
     private let minimumTVVoteCount = 120
     private let documentaryGenreID = 99
+    private let vectorRetriever = LibraryVectorRetriever.shared
     
     private let seedCatalog: [String: [String]] = [
         "space": ["Interstellar", "The Martian", "Apollo 13", "Gravity", "The Expanse", "For All Mankind", "Contact"],
@@ -44,6 +45,12 @@ final class RecommendationEngineV2 {
         userTVShows: [TVShow]
     ) async -> RecommendationResult {
         let intent = parseIntent(from: query)
+        let retrievalSnapshot = vectorRetriever.retrieve(
+            query: query,
+            understanding: understanding,
+            userMovies: userMovies,
+            userTVShows: userTVShows
+        )
         let candidateQueries = buildCandidateQueries(query: query, understanding: understanding)
         
         let movieCandidates = await fetchMovieCandidates(queries: candidateQueries)
@@ -65,13 +72,15 @@ final class RecommendationEngineV2 {
             filteredMovies,
             query: query,
             understanding: understanding,
-            userMovies: userMovies
+            userMovies: userMovies,
+            retrievalSnapshot: retrievalSnapshot
         )
         let tvRanks = rankTVShows(
             filteredTVShows,
             query: query,
             understanding: understanding,
-            userTVShows: userTVShows
+            userTVShows: userTVShows,
+            retrievalSnapshot: retrievalSnapshot
         )
         
         return RecommendationResult(
@@ -84,7 +93,10 @@ final class RecommendationEngineV2 {
     
     private func buildCandidateQueries(query: String, understanding: QueryUnderstanding) -> [String] {
         var candidates: [String] = []
-        candidates.append(query)
+        let sanitizedQuery = sanitizeQueryForSearch(query)
+        if !sanitizedQuery.isEmpty {
+            candidates.append(sanitizedQuery)
+        }
         
         let cleanSuggestions = understanding.suggestions
             .compactMap(cleanSuggestion)
@@ -170,7 +182,8 @@ final class RecommendationEngineV2 {
         _ candidates: [TMDBMovie],
         query: String,
         understanding: QueryUnderstanding,
-        userMovies: [Movie]
+        userMovies: [Movie],
+        retrievalSnapshot: VectorRetrievalSnapshot
     ) -> [RankedMovieRecommendation] {
         let config = RecommendationRankingConfig.current
         let intentTokens = focusedIntentTokens(query: query, understanding: understanding)
@@ -186,7 +199,13 @@ final class RecommendationEngineV2 {
             let suggestionMatch = suggestionTitleTokens
                 .map { jaccard($0, tokenize(movie.title)) }
                 .max() ?? 0
-            let semantic = max(semanticBase, suggestionMatch * 0.95)
+            let coherence = vectorRetriever.coherenceScore(
+                queryText: retrievalSnapshot.queryText,
+                candidateTitle: movie.title,
+                candidateOverview: movie.overview,
+                snapshot: retrievalSnapshot
+            )
+            let semantic = max(semanticBase, suggestionMatch * 0.95, coherence * 0.98)
             let quality = min(1.0, max(0.0, (movie.voteAverage ?? 0) / 10.0))
             
             let maxSeenSimilarity = libraryTitleTokens
@@ -207,22 +226,37 @@ final class RecommendationEngineV2 {
             if hasIntentSignal && semantic < 0.02 {
                 rawScore -= 0.30
             }
+            if hasIntentSignal && coherence < config.coherenceThreshold {
+                rawScore -= 0.40
+            }
             
             let reasons = buildReasons(
                 semantic: semantic,
+                coherence: coherence,
                 quality: quality,
                 popularity: popularity,
                 novelty: novelty,
                 voteCount: movie.voteCount ?? 0
             )
             
-            return RankedMovieRecommendation(movie: movie, score: rawScore, reasons: reasons, semanticEvidence: semantic)
+            return RankedMovieRecommendation(
+                movie: movie,
+                score: rawScore,
+                reasons: reasons,
+                semanticEvidence: semantic,
+                coherenceEvidence: coherence
+            )
         }
 
         let constrained: [RankedMovieRecommendation]
         if hasIntentSignal {
-            let semanticMatches = scored.filter { $0.semanticEvidence >= 0.02 }
-            constrained = semanticMatches.count >= 4 ? semanticMatches : scored
+            let coherenceMatches = scored.filter { $0.coherenceEvidence >= config.coherenceThreshold }
+            if coherenceMatches.count >= 4 {
+                constrained = coherenceMatches
+            } else {
+                let semanticMatches = scored.filter { $0.semanticEvidence >= 0.02 }
+                constrained = semanticMatches.count >= 4 ? semanticMatches : scored
+            }
         } else {
             constrained = scored
         }
@@ -234,7 +268,8 @@ final class RecommendationEngineV2 {
         _ candidates: [TMDBTVShow],
         query: String,
         understanding: QueryUnderstanding,
-        userTVShows: [TVShow]
+        userTVShows: [TVShow],
+        retrievalSnapshot: VectorRetrievalSnapshot
     ) -> [RankedTVRecommendation] {
         let config = RecommendationRankingConfig.current
         let intentTokens = focusedIntentTokens(query: query, understanding: understanding)
@@ -250,7 +285,13 @@ final class RecommendationEngineV2 {
             let suggestionMatch = suggestionTitleTokens
                 .map { jaccard($0, tokenize(show.title)) }
                 .max() ?? 0
-            let semantic = max(semanticBase, suggestionMatch * 0.95)
+            let coherence = vectorRetriever.coherenceScore(
+                queryText: retrievalSnapshot.queryText,
+                candidateTitle: show.title,
+                candidateOverview: show.overview,
+                snapshot: retrievalSnapshot
+            )
+            let semantic = max(semanticBase, suggestionMatch * 0.95, coherence * 0.98)
             let quality = min(1.0, max(0.0, (show.voteAverage ?? 0) / 10.0))
             
             let maxSeenSimilarity = libraryTitleTokens
@@ -271,22 +312,37 @@ final class RecommendationEngineV2 {
             if hasIntentSignal && semantic < 0.02 {
                 rawScore -= 0.30
             }
+            if hasIntentSignal && coherence < config.coherenceThreshold {
+                rawScore -= 0.40
+            }
             
             let reasons = buildReasons(
                 semantic: semantic,
+                coherence: coherence,
                 quality: quality,
                 popularity: popularity,
                 novelty: novelty,
                 voteCount: show.voteCount ?? 0
             )
             
-            return RankedTVRecommendation(show: show, score: rawScore, reasons: reasons, semanticEvidence: semantic)
+            return RankedTVRecommendation(
+                show: show,
+                score: rawScore,
+                reasons: reasons,
+                semanticEvidence: semantic,
+                coherenceEvidence: coherence
+            )
         }
 
         let constrained: [RankedTVRecommendation]
         if hasIntentSignal {
-            let semanticMatches = scored.filter { $0.semanticEvidence >= 0.02 }
-            constrained = semanticMatches.count >= 4 ? semanticMatches : scored
+            let coherenceMatches = scored.filter { $0.coherenceEvidence >= config.coherenceThreshold }
+            if coherenceMatches.count >= 4 {
+                constrained = coherenceMatches
+            } else {
+                let semanticMatches = scored.filter { $0.semanticEvidence >= 0.02 }
+                constrained = semanticMatches.count >= 4 ? semanticMatches : scored
+            }
         } else {
             constrained = scored
         }
@@ -354,6 +410,7 @@ final class RecommendationEngineV2 {
     
     private func buildReasons(
         semantic: Double,
+        coherence: Double,
         quality: Double,
         popularity: Double,
         novelty: Double,
@@ -361,6 +418,7 @@ final class RecommendationEngineV2 {
     ) -> [String] {
         var reasons: [(String, Double)] = [
             ("Strong thematic match", semantic),
+            ("Strong topic coherence", coherence),
             ("High audience rating", quality),
             ("Well-known pick", popularity),
             ("Novel versus your library", novelty)
@@ -477,6 +535,15 @@ final class RecommendationEngineV2 {
         let raw = tokenize(candidateText)
         return raw.filter { !intentStopTokens.contains($0) }
     }
+
+    private func sanitizeQueryForSearch(_ query: String) -> String {
+        query
+            .replacingOccurrences(of: "|", with: " ")
+            .replacingOccurrences(of: "refine:", with: " ", options: .caseInsensitive)
+            .replacingOccurrences(of: "preference:", with: " ", options: .caseInsensitive)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 struct RankedMovieRecommendation {
@@ -484,6 +551,7 @@ struct RankedMovieRecommendation {
     let score: Double
     let reasons: [String]
     let semanticEvidence: Double
+    let coherenceEvidence: Double
 }
 
 struct RankedTVRecommendation {
@@ -491,6 +559,7 @@ struct RankedTVRecommendation {
     let score: Double
     let reasons: [String]
     let semanticEvidence: Double
+    let coherenceEvidence: Double
 }
 
 struct RecommendationResult {
@@ -515,12 +584,14 @@ struct RecommendationRankingConfig {
     let popularityWeight: Double
     let noveltyWeight: Double
     let diversityBalance: Double
+    let coherenceThreshold: Double
     
     private static let semanticKey = "recommend.semanticWeight"
     private static let qualityKey = "recommend.qualityWeight"
     private static let popularityKey = "recommend.popularityWeight"
     private static let noveltyKey = "recommend.noveltyWeight"
     private static let diversityKey = "recommend.diversityBalance"
+    private static let coherenceThresholdKey = "recommend.coherenceThreshold"
     
     static var current: RecommendationRankingConfig {
         let defaults = UserDefaults.standard
@@ -529,7 +600,8 @@ struct RecommendationRankingConfig {
             qualityWeight: defaults.object(forKey: qualityKey) as? Double ?? 0.28,
             popularityWeight: defaults.object(forKey: popularityKey) as? Double ?? 0.20,
             noveltyWeight: defaults.object(forKey: noveltyKey) as? Double ?? 0.10,
-            diversityBalance: defaults.object(forKey: diversityKey) as? Double ?? 0.78
+            diversityBalance: defaults.object(forKey: diversityKey) as? Double ?? 0.78,
+            coherenceThreshold: defaults.object(forKey: coherenceThresholdKey) as? Double ?? 0.34
         )
     }
 }
