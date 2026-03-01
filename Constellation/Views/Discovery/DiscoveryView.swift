@@ -10,6 +10,7 @@ struct DiscoveryView: View {
     @State private var turns: [DiscoveryChatTurn] = []
     @State private var conversationState = DiscoveryConversationState()
     @State private var showingAddMovie: TMDBMovie?
+    @State private var showingAddTVShow: TMDBTVShow?
 
     private let starterPrompts = [
         "space exploration",
@@ -51,7 +52,8 @@ struct DiscoveryView: View {
                                         posterURL: movie.posterURL,
                                         emoji: "🎬",
                                         actionTitle: "Add Movie",
-                                        action: { showingAddMovie = movie }
+                                        action: { showingAddMovie = movie },
+                                        onTap: { showingAddMovie = movie }
                                     )
                                 }
 
@@ -62,8 +64,9 @@ struct DiscoveryView: View {
                                         reason: turn.result?.tvRecommendationReasons[show.id] ?? "Strong fit for your request",
                                         posterURL: show.posterURL,
                                         emoji: "📺",
-                                        actionTitle: nil,
-                                        action: nil
+                                        actionTitle: "Add TV Show",
+                                        action: { showingAddTVShow = show },
+                                        onTap: { showingAddTVShow = show }
                                     )
                                 }
 
@@ -127,6 +130,9 @@ struct DiscoveryView: View {
             }
             .sheet(item: $showingAddMovie) { movie in
                 MovieDetailSheet(movie: movie)
+            }
+            .sheet(item: $showingAddTVShow) { show in
+                TVShowDetailSheet(show: show)
             }
         }
     }
@@ -360,7 +366,8 @@ struct DiscoveryView: View {
         posterURL: URL?,
         emoji: String,
         actionTitle: String?,
-        action: (() -> Void)?
+        action: (() -> Void)?,
+        onTap: (() -> Void)?
     ) -> some View {
         HStack(alignment: .top, spacing: 10) {
             AsyncImage(url: posterURL) { image in
@@ -414,6 +421,10 @@ struct DiscoveryView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 14)
                 .stroke(Color.black.opacity(0.07), lineWidth: 1)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 14))
+        .onTapGesture {
+            onTap?()
         }
     }
 }
