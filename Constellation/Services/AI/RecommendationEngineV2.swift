@@ -601,7 +601,7 @@ struct RecommendationRankingConfig {
             popularityWeight: defaults.object(forKey: popularityKey) as? Double ?? 0.20,
             noveltyWeight: defaults.object(forKey: noveltyKey) as? Double ?? 0.10,
             diversityBalance: defaults.object(forKey: diversityKey) as? Double ?? 0.78,
-            coherenceThreshold: defaults.object(forKey: coherenceThresholdKey) as? Double ?? 0.34
+            coherenceThreshold: defaults.object(forKey: coherenceThresholdKey) as? Double ?? 0.22
         )
     }
 }

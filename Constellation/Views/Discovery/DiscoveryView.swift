@@ -4,7 +4,7 @@ import SwiftData
 struct DiscoveryView: View {
     @Query private var movies: [Movie]
     @Query private var tvShows: [TVShow]
-    @AppStorage("recommend.coherenceThreshold") private var coherenceThreshold = 0.34
+    @AppStorage("recommend.coherenceThreshold") private var coherenceThreshold = 0.22
 
     @State private var draftQuery = ""
     @State private var isSearching = false

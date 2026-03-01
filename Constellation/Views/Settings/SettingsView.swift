@@ -14,7 +14,7 @@ struct SettingsView: View {
     @AppStorage("recommend.popularityWeight") private var recommendationPopularityWeight = 0.20
     @AppStorage("recommend.noveltyWeight") private var recommendationNoveltyWeight = 0.10
     @AppStorage("recommend.diversityBalance") private var recommendationDiversityBalance = 0.78
-    @AppStorage("recommend.coherenceThreshold") private var recommendationCoherenceThreshold = 0.34
+    @AppStorage("recommend.coherenceThreshold") private var recommendationCoherenceThreshold = 0.22
     
     var body: some View {
         NavigationStack {
@@ -59,7 +59,7 @@ struct SettingsView: View {
                         Slider(value: $recommendationDiversityBalance, in: 0.40...0.95, step: 0.01)
 
                         weightRow(title: "Topic Coherence Gate", value: recommendationCoherenceThreshold)
-                        Slider(value: $recommendationCoherenceThreshold, in: 0.20...0.80, step: 0.01)
+                        Slider(value: $recommendationCoherenceThreshold, in: 0.10...0.70, step: 0.01)
                         
                         Text("Higher semantic weight favors close topical matches. Higher novelty boosts less similar-to-library picks. Diversity balance controls result variety. Topic coherence gate hard-drops off-topic cards.")
                             .font(.caption)
@@ -72,7 +72,7 @@ struct SettingsView: View {
                         recommendationPopularityWeight = 0.20
                         recommendationNoveltyWeight = 0.10
                         recommendationDiversityBalance = 0.78
-                        recommendationCoherenceThreshold = 0.34
+                        recommendationCoherenceThreshold = 0.22
                     }
                 }
                 

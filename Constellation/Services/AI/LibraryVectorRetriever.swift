@@ -186,13 +186,20 @@ final class LibraryVectorRetriever {
         let right = b.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !left.isEmpty, !right.isEmpty else { return 0 }
 
+        let lexical = lexicalSimilarity(left, right)
         if let embedding = sentenceEmbedding {
             let distance = embedding.distance(between: left, and: right)
             if distance.isFinite {
-                return max(0, 1 - distance)
+                // Exponential transform is more stable for sentence distances than (1 - distance).
+                let semantic = exp(-max(0, distance))
+                return min(max((semantic * 0.82) + (lexical * 0.18), 0), 1)
             }
         }
 
+        return lexical
+    }
+
+    private func lexicalSimilarity(_ left: String, _ right: String) -> Double {
         let leftTokens = Set(left.lowercased().split(separator: " ").map(String.init))
         let rightTokens = Set(right.lowercased().split(separator: " ").map(String.init))
         let intersection = leftTokens.intersection(rightTokens).count
