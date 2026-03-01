@@ -215,6 +215,20 @@ struct SmartDiscoveryResultsView: View {
         return items
     }
     
+    private var filteredTVRecommendations: [TMDBTVShow] {
+        var items = result.tvRecommendations
+        
+        if selectedFormat == "Movies" {
+            items = []
+        }
+        
+        if let vibe = selectedVibe {
+            items = items.filter { matchesVibe(recommendation: $0, vibe: vibe) }
+        }
+        
+        return items
+    }
+    
     private var filteredConnections: [Connection] {
         let validTitles = Set(filteredMovies.map(\.title) + filteredTVShows.map(\.title))
         return result.connections.filter { validTitles.contains($0.from) && validTitles.contains($0.to) }
@@ -347,9 +361,9 @@ struct SmartDiscoveryResultsView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("You Might Like")
-                                .font(.title3)
-                                .fontWeight(.semibold)
+                            Text("You Might Like (Movies)")
+                            .font(.title3)
+                            .fontWeight(.semibold)
                             
                             Text("Popular movies in this theme")
                                 .font(.caption)
@@ -373,6 +387,33 @@ struct SmartDiscoveryResultsView: View {
                 }
             }
             
+            if !filteredTVRecommendations.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("You Might Like (TV)")
+                                .font(.title3)
+                                .fontWeight(.semibold)
+                            
+                            Text("Popular TV shows in this theme")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        Text("\(filteredTVRecommendations.count)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal)
+                    
+                    ForEach(filteredTVRecommendations) { show in
+                        RecommendationTVShowCard(show: show)
+                    }
+                }
+            }
+            
             if !hasFilteredResults {
                 ContentUnavailableView(
                     "No Matches Yet",
@@ -385,7 +426,7 @@ struct SmartDiscoveryResultsView: View {
     }
     
     private var hasFilteredResults: Bool {
-        !filteredMovies.isEmpty || !filteredTVShows.isEmpty || !filteredRecommendations.isEmpty
+        !filteredMovies.isEmpty || !filteredTVShows.isEmpty || !filteredRecommendations.isEmpty || !filteredTVRecommendations.isEmpty
     }
     
     private func matchesVibe(movie: Movie, vibe: String) -> Bool {
@@ -399,6 +440,11 @@ struct SmartDiscoveryResultsView: View {
     }
     
     private func matchesVibe(recommendation: TMDBMovie, vibe: String) -> Bool {
+        let haystack = [recommendation.title, recommendation.overview ?? ""].joined(separator: " ").lowercased()
+        return matchesVibe(haystack: haystack, vibe: vibe)
+    }
+    
+    private func matchesVibe(recommendation: TMDBTVShow, vibe: String) -> Bool {
         let haystack = [recommendation.title, recommendation.overview ?? ""].joined(separator: " ").lowercased()
         return matchesVibe(haystack: haystack, vibe: vibe)
     }
@@ -606,6 +652,61 @@ struct RecommendationMovieCard: View {
                     .font(.caption2)
             }
             .foregroundStyle(.blue)
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .cornerRadius(12)
+        .padding(.horizontal)
+    }
+}
+
+struct RecommendationTVShowCard: View {
+    let show: TMDBTVShow
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            AsyncImage(url: show.posterURL) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+                    .overlay {
+                        Image(systemName: "tv")
+                            .foregroundStyle(.secondary)
+                    }
+            }
+            .frame(width: 60, height: 90)
+            .cornerRadius(8)
+            
+            VStack(alignment: .leading, spacing: 6) {
+                Text(show.title)
+                    .font(.headline)
+                    .lineLimit(2)
+                
+                if let year = show.year {
+                    Text(String(year))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                
+                if let rating = show.voteAverage {
+                    HStack(spacing: 4) {
+                        Image(systemName: "star.fill")
+                            .font(.caption)
+                        Text(String(format: "%.1f", rating))
+                            .font(.caption)
+                    }
+                    .foregroundStyle(.yellow)
+                }
+            }
+            
+            Spacer()
+            
+            Image(systemName: "tv")
+                .font(.title3)
+                .foregroundStyle(.indigo)
         }
         .padding()
         .background(Color(.systemGray6))
