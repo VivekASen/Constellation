@@ -44,9 +44,10 @@ final class ChatIntentService {
 
     func planTurn(message: String, state: ChatConversationState) async -> ChatTurnPlan {
         if let llm = await planTurnWithLLM(message: message, state: state) {
-            return llm
+            return sanitize(plan: llm, message: message, state: state)
         }
-        return planTurnHeuristic(message: message, state: state)
+        let heuristic = planTurnHeuristic(message: message, state: state)
+        return sanitize(plan: heuristic, message: message, state: state)
     }
 
     func apply(plan: ChatTurnPlan, to state: ChatConversationState) -> ChatConversationState {
@@ -355,6 +356,68 @@ final class ChatIntentService {
         }
         let tokens = normalized.split(separator: " ")
         return !tokens.isEmpty && tokens.count <= 6
+    }
+
+    private func sanitize(plan: ChatTurnPlan, message: String, state: ChatConversationState) -> ChatTurnPlan {
+        let normalized = normalize(message)
+        let wantsMore = containsAny(normalized, terms: [
+            "more", "another", "anything else", "similar", "keep going", "next", "additional"
+        ])
+        let wantsTV = containsAny(normalized, terms: ["tv", "show", "shows", "series"])
+        let wantsMovies = containsAny(normalized, terms: ["movie", "movies", "film", "films"])
+        let metaOnly = isMetaOnlyMessage(normalized)
+
+        var topicAction = plan.topicAction
+        var topicText = plan.topicText
+        var refinementText = plan.refinementText
+        var mediaOverride = plan.mediaModeOverride
+        var movieLimit = plan.displayPreference.movieLimit
+        var tvLimit = plan.displayPreference.tvLimit
+
+        // Follow-up requests should not reset the main topic.
+        if state.topic != nil && (wantsMore || metaOnly) && topicAction == .startNew {
+            topicAction = .keep
+            topicText = nil
+        }
+
+        // Enforce explicit media mode from user phrasing.
+        if wantsTV && !wantsMovies {
+            mediaOverride = .tvOnly
+        } else if wantsMovies && !wantsTV {
+            mediaOverride = .movieOnly
+        }
+
+        let effectiveMode = mediaOverride ?? state.mediaMode
+        switch effectiveMode {
+        case .tvOnly:
+            movieLimit = 0
+            tvLimit = max(tvLimit, wantsMore ? 4 : 2)
+        case .movieOnly:
+            tvLimit = 0
+            movieLimit = max(movieLimit, wantsMore ? 4 : 2)
+        case .any:
+            if movieLimit == 0 && tvLimit == 0 {
+                movieLimit = wantsMore ? 2 : 1
+                tvLimit = wantsMore ? 2 : 1
+            }
+        }
+
+        if wantsMore && refinementText == nil && state.topic != nil {
+            refinementText = "more options in the same style"
+        }
+
+        return ChatTurnPlan(
+            resetRequested: plan.resetRequested,
+            topicAction: topicAction,
+            topicText: topicText,
+            refinementText: refinementText,
+            mediaModeOverride: mediaOverride,
+            documentaryOnlyOverride: plan.documentaryOnlyOverride,
+            fictionPreferenceOverride: plan.fictionPreferenceOverride,
+            wantsMore: plan.wantsMore || wantsMore,
+            displayPreference: ChatDisplayPreference(movieLimit: movieLimit, tvLimit: tvLimit),
+            assistantLine: plan.assistantLine
+        )
     }
 }
 

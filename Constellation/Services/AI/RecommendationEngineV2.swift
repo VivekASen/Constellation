@@ -29,6 +29,11 @@ final class RecommendationEngineV2 {
         "science fiction", "sci fi", "documentary", "mystery", "crime", "animation", "family",
         "war", "western", "history", "movie", "movies", "show", "tv"
     ]
+    private let intentStopTokens: Set<String> = [
+        "refine", "more", "another", "anything", "else", "same", "style", "options",
+        "preference", "only", "movie", "movies", "tv", "show", "shows", "series",
+        "suggestion", "suggestions", "focus", "keep", "going", "format", "new", "topic"
+    ]
     
     private init() {}
     
@@ -168,14 +173,20 @@ final class RecommendationEngineV2 {
         userMovies: [Movie]
     ) -> [RankedMovieRecommendation] {
         let config = RecommendationRankingConfig.current
-        let queryTokens = tokenize(query + " " + understanding.themes.joined(separator: " "))
+        let intentTokens = focusedIntentTokens(query: query, understanding: understanding)
+        let hasIntentSignal = !intentTokens.isEmpty
+        let suggestionTitleTokens = understanding.suggestions.map(tokenize)
         let libraryTitleTokens = userMovies.map { tokenize($0.title) }
         
         let scored = candidates.map { movie -> RankedMovieRecommendation in
             let text = [movie.title, movie.overview ?? ""].joined(separator: " ")
             let itemTokens = tokenize(text)
             
-            let semantic = jaccard(queryTokens, itemTokens)
+            let semanticBase = jaccard(intentTokens, itemTokens)
+            let suggestionMatch = suggestionTitleTokens
+                .map { jaccard($0, tokenize(movie.title)) }
+                .max() ?? 0
+            let semantic = max(semanticBase, suggestionMatch * 0.95)
             let quality = min(1.0, max(0.0, (movie.voteAverage ?? 0) / 10.0))
             
             let maxSeenSimilarity = libraryTitleTokens
@@ -193,6 +204,9 @@ final class RecommendationEngineV2 {
             if (movie.voteCount ?? 0) < minimumMovieVoteCount {
                 rawScore -= 0.12
             }
+            if hasIntentSignal && semantic < 0.02 {
+                rawScore -= 0.30
+            }
             
             let reasons = buildReasons(
                 semantic: semantic,
@@ -202,10 +216,18 @@ final class RecommendationEngineV2 {
                 voteCount: movie.voteCount ?? 0
             )
             
-            return RankedMovieRecommendation(movie: movie, score: rawScore, reasons: reasons)
+            return RankedMovieRecommendation(movie: movie, score: rawScore, reasons: reasons, semanticEvidence: semantic)
         }
-        
-        return rerankMoviesForDiversity(scored, balance: config.diversityBalance)
+
+        let constrained: [RankedMovieRecommendation]
+        if hasIntentSignal {
+            let semanticMatches = scored.filter { $0.semanticEvidence >= 0.02 }
+            constrained = semanticMatches.count >= 4 ? semanticMatches : scored
+        } else {
+            constrained = scored
+        }
+
+        return rerankMoviesForDiversity(constrained, balance: config.diversityBalance)
     }
     
     private func rankTVShows(
@@ -215,14 +237,20 @@ final class RecommendationEngineV2 {
         userTVShows: [TVShow]
     ) -> [RankedTVRecommendation] {
         let config = RecommendationRankingConfig.current
-        let queryTokens = tokenize(query + " " + understanding.themes.joined(separator: " "))
+        let intentTokens = focusedIntentTokens(query: query, understanding: understanding)
+        let hasIntentSignal = !intentTokens.isEmpty
+        let suggestionTitleTokens = understanding.suggestions.map(tokenize)
         let libraryTitleTokens = userTVShows.map { tokenize($0.title) }
         
         let scored = candidates.map { show -> RankedTVRecommendation in
             let text = [show.title, show.overview ?? ""].joined(separator: " ")
             let itemTokens = tokenize(text)
             
-            let semantic = jaccard(queryTokens, itemTokens)
+            let semanticBase = jaccard(intentTokens, itemTokens)
+            let suggestionMatch = suggestionTitleTokens
+                .map { jaccard($0, tokenize(show.title)) }
+                .max() ?? 0
+            let semantic = max(semanticBase, suggestionMatch * 0.95)
             let quality = min(1.0, max(0.0, (show.voteAverage ?? 0) / 10.0))
             
             let maxSeenSimilarity = libraryTitleTokens
@@ -240,6 +268,9 @@ final class RecommendationEngineV2 {
             if (show.voteCount ?? 0) < minimumTVVoteCount {
                 rawScore -= 0.12
             }
+            if hasIntentSignal && semantic < 0.02 {
+                rawScore -= 0.30
+            }
             
             let reasons = buildReasons(
                 semantic: semantic,
@@ -249,10 +280,18 @@ final class RecommendationEngineV2 {
                 voteCount: show.voteCount ?? 0
             )
             
-            return RankedTVRecommendation(show: show, score: rawScore, reasons: reasons)
+            return RankedTVRecommendation(show: show, score: rawScore, reasons: reasons, semanticEvidence: semantic)
         }
-        
-        return rerankTVForDiversity(scored, balance: config.diversityBalance)
+
+        let constrained: [RankedTVRecommendation]
+        if hasIntentSignal {
+            let semanticMatches = scored.filter { $0.semanticEvidence >= 0.02 }
+            constrained = semanticMatches.count >= 4 ? semanticMatches : scored
+        } else {
+            constrained = scored
+        }
+
+        return rerankTVForDiversity(constrained, balance: config.diversityBalance)
     }
     
     private func rerankMoviesForDiversity(_ ranked: [RankedMovieRecommendation], balance: Double) -> [RankedMovieRecommendation] {
@@ -431,18 +470,27 @@ final class RecommendationEngineV2 {
         if genericTerms.contains(normalized) { return false }
         return true
     }
+
+    private func focusedIntentTokens(query: String, understanding: QueryUnderstanding) -> Set<String> {
+        let candidateText = [query, understanding.themes.joined(separator: " "), understanding.genres.joined(separator: " ")]
+            .joined(separator: " ")
+        let raw = tokenize(candidateText)
+        return raw.filter { !intentStopTokens.contains($0) }
+    }
 }
 
 struct RankedMovieRecommendation {
     let movie: TMDBMovie
     let score: Double
     let reasons: [String]
+    let semanticEvidence: Double
 }
 
 struct RankedTVRecommendation {
     let show: TMDBTVShow
     let score: Double
     let reasons: [String]
+    let semanticEvidence: Double
 }
 
 struct RecommendationResult {
