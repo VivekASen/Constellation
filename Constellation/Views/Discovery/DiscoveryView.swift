@@ -241,7 +241,7 @@ struct DiscoveryView: View {
         guard !message.isEmpty else { return }
         draftQuery = ""
 
-        let plan = planTurn(for: message)
+        let plan = await planTurn(for: message)
         applyPlan(plan)
 
         var turn = DiscoveryChatTurn(
@@ -283,7 +283,14 @@ struct DiscoveryView: View {
         terms.contains { text.contains($0) }
     }
 
-    private func planTurn(for message: String) -> DiscoveryTurnPlan {
+    private func planTurn(for message: String) async -> DiscoveryTurnPlan {
+        if let aiPlan = await planTurnWithLLM(for: message) {
+            return aiPlan
+        }
+        return planTurnHeuristic(for: message)
+    }
+
+    private func planTurnHeuristic(for message: String) -> DiscoveryTurnPlan {
         let normalized = normalizedIntentText(message)
         let wantsMore = containsAny(normalized, terms: [
             "more", "another", "anything else", "similar", "keep going", "next", "additional"
@@ -366,8 +373,133 @@ struct DiscoveryView: View {
             documentaryOnlyOverride: documentaryOnly,
             fictionPreferenceOverride: fictionPreference,
             wantsMore: wantsMore,
-            displayPreference: display
+            displayPreference: display,
+            assistantLine: nil
         )
+    }
+
+    private func planTurnWithLLM(for message: String) async -> DiscoveryTurnPlan? {
+        let currentTopic = conversationState.topic ?? ""
+        let refinements = conversationState.refinements.joined(separator: " | ")
+        let mediaMode: String
+        switch conversationState.mediaMode {
+        case .any: mediaMode = "any"
+        case .movieOnly: mediaMode = "movieOnly"
+        case .tvOnly: mediaMode = "tvOnly"
+        }
+
+        let prompt = """
+        You are a planner for a media discovery chat assistant.
+        Convert the user's latest message into STRICT JSON for app logic.
+
+        Current conversation state:
+        - topic: "\(currentTopic)"
+        - refinements: "\(refinements)"
+        - media_mode: "\(mediaMode)"
+        - documentary_only: \(conversationState.documentaryOnly ? "true" : "false")
+        - fiction_preference: "\(conversationState.fictionPreference ?? "any")"
+
+        Latest user message:
+        "\(message)"
+
+        Rules:
+        1) If user asks for "more tv suggestions" (or similar), this is a REFINE, not a new topic.
+        2) "more", "another", "anything else" should usually keep topic and increase counts.
+        3) For format requests, set media_mode_override to movieOnly or tvOnly.
+        4) For documentary/non-fiction requests, set documentary_only_override=true.
+        5) assistant_line must sound natural and concise.
+        6) Output JSON only, no prose.
+
+        Output schema:
+        {
+          "reset_requested": bool,
+          "topic_action": "startNew" | "refine" | "keep",
+          "topic_text": string | null,
+          "refinement_text": string | null,
+          "media_mode_override": "any" | "movieOnly" | "tvOnly" | null,
+          "documentary_only_override": bool | null,
+          "fiction_preference_override": "Fiction" | "Non-Fiction" | null,
+          "wants_more": bool,
+          "movie_count": int,
+          "tv_count": int,
+          "assistant_line": string
+        }
+        """
+
+        guard let json = await callOllamaForJSON(prompt: prompt),
+              let parsed = parseTurnPlanJSON(json) else {
+            return nil
+        }
+
+        var movieLimit = min(max(parsed.movieCount, 0), 6)
+        var tvLimit = min(max(parsed.tvCount, 0), 6)
+        if movieLimit == 0 && tvLimit == 0 {
+            switch parsed.mediaModeOverride ?? conversationState.mediaMode {
+            case .movieOnly:
+                movieLimit = parsed.wantsMore ? 4 : 2
+            case .tvOnly:
+                tvLimit = parsed.wantsMore ? 4 : 2
+            case .any:
+                movieLimit = parsed.wantsMore ? 2 : 1
+                tvLimit = parsed.wantsMore ? 2 : 1
+            }
+        }
+
+        return DiscoveryTurnPlan(
+            resetRequested: parsed.resetRequested,
+            topicAction: parsed.topicAction,
+            topicText: parsed.topicText,
+            refinementText: parsed.refinementText,
+            mediaModeOverride: parsed.mediaModeOverride,
+            documentaryOnlyOverride: parsed.documentaryOnlyOverride,
+            fictionPreferenceOverride: parsed.fictionPreferenceOverride,
+            wantsMore: parsed.wantsMore,
+            displayPreference: TurnDisplayPreference(movieLimit: movieLimit, tvLimit: tvLimit),
+            assistantLine: parsed.assistantLine
+        )
+    }
+
+    private func callOllamaForJSON(prompt: String) async -> String? {
+        guard let url = URL(string: "http://localhost:11434/api/generate") else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "model": "llama3.2",
+            "prompt": prompt,
+            "stream": false,
+            "format": "json",
+            "options": [
+                "temperature": 0.1
+            ]
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, _) = try await URLSession.shared.data(for: request)
+            let envelope = try JSONDecoder().decode(OllamaEnvelope.self, from: data)
+            return envelope.response
+        } catch {
+            return nil
+        }
+    }
+
+    private func parseTurnPlanJSON(_ json: String) -> ParsedTurnPlan? {
+        let body = extractJSONObject(from: json)
+        guard let data = body.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(ParsedTurnPlanJSON.self, from: data) else {
+            return nil
+        }
+        return decoded.toParsedPlan()
+    }
+
+    private func extractJSONObject(from text: String) -> String {
+        guard let start = text.firstIndex(of: "{"),
+              let end = text.lastIndex(of: "}") else {
+            return text
+        }
+        return String(text[start...end])
     }
 
     private func applyPlan(_ plan: DiscoveryTurnPlan) {
@@ -403,6 +535,9 @@ struct DiscoveryView: View {
     }
 
     private func assistantSummary(for plan: DiscoveryTurnPlan) -> String {
+        if let line = plan.assistantLine, !line.isEmpty {
+            return line
+        }
         if plan.resetRequested {
             return "Reset complete. Tell me what you want next."
         }
@@ -679,6 +814,101 @@ private struct DiscoveryTurnPlan {
     let fictionPreferenceOverride: String?
     let wantsMore: Bool
     let displayPreference: TurnDisplayPreference
+    let assistantLine: String?
+}
+
+private struct ParsedTurnPlan {
+    let resetRequested: Bool
+    let topicAction: DiscoveryTurnPlan.TopicAction
+    let topicText: String?
+    let refinementText: String?
+    let mediaModeOverride: DiscoveryConversationState.MediaMode?
+    let documentaryOnlyOverride: Bool?
+    let fictionPreferenceOverride: String?
+    let wantsMore: Bool
+    let movieCount: Int
+    let tvCount: Int
+    let assistantLine: String?
+}
+
+private struct ParsedTurnPlanJSON: Decodable {
+    let resetRequested: Bool?
+    let topicAction: String?
+    let topicText: String?
+    let refinementText: String?
+    let mediaModeOverride: String?
+    let documentaryOnlyOverride: Bool?
+    let fictionPreferenceOverride: String?
+    let wantsMore: Bool?
+    let movieCount: Int?
+    let tvCount: Int?
+    let assistantLine: String?
+
+    enum CodingKeys: String, CodingKey {
+        case resetRequested = "reset_requested"
+        case topicAction = "topic_action"
+        case topicText = "topic_text"
+        case refinementText = "refinement_text"
+        case mediaModeOverride = "media_mode_override"
+        case documentaryOnlyOverride = "documentary_only_override"
+        case fictionPreferenceOverride = "fiction_preference_override"
+        case wantsMore = "wants_more"
+        case movieCount = "movie_count"
+        case tvCount = "tv_count"
+        case assistantLine = "assistant_line"
+    }
+
+    func toParsedPlan() -> ParsedTurnPlan {
+        let action: DiscoveryTurnPlan.TopicAction
+        switch (topicAction ?? "").lowercased() {
+        case "startnew", "new", "start_new":
+            action = .startNew
+        case "refine":
+            action = .refine
+        default:
+            action = .keep
+        }
+
+        let mode: DiscoveryConversationState.MediaMode?
+        switch (mediaModeOverride ?? "").lowercased() {
+        case "movieonly", "movie_only":
+            mode = .movieOnly
+        case "tvonly", "tv_only":
+            mode = .tvOnly
+        case "any":
+            mode = .any
+        default:
+            mode = nil
+        }
+
+        let fictionPref: String?
+        switch (fictionPreferenceOverride ?? "").lowercased() {
+        case "fiction":
+            fictionPref = "Fiction"
+        case "non-fiction", "non fiction", "nonfiction":
+            fictionPref = "Non-Fiction"
+        default:
+            fictionPref = nil
+        }
+
+        return ParsedTurnPlan(
+            resetRequested: resetRequested ?? false,
+            topicAction: action,
+            topicText: topicText?.trimmingCharacters(in: .whitespacesAndNewlines),
+            refinementText: refinementText?.trimmingCharacters(in: .whitespacesAndNewlines),
+            mediaModeOverride: mode,
+            documentaryOnlyOverride: documentaryOnlyOverride,
+            fictionPreferenceOverride: fictionPref,
+            wantsMore: wantsMore ?? false,
+            movieCount: movieCount ?? 1,
+            tvCount: tvCount ?? 1,
+            assistantLine: assistantLine?.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+}
+
+private struct OllamaEnvelope: Decodable {
+    let response: String
 }
 
 private struct DiscoveryConversationState {
