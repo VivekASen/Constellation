@@ -16,6 +16,7 @@ struct DiscoveryView: View {
     @State private var isSearching = false
     @State private var discoveryResult: DiscoveryResult?
     @State private var showingAddMovie: TMDBMovie?
+    @State private var progressiveContext = ProgressiveDiscoveryContext()
     
     var body: some View {
         NavigationStack {
@@ -49,6 +50,7 @@ struct DiscoveryView: View {
                             Button(action: {
                                 searchText = ""
                                 discoveryResult = nil
+                                progressiveContext = ProgressiveDiscoveryContext()
                             }) {
                                 Image(systemName: "xmark.circle.fill")
                                     .foregroundStyle(.secondary)
@@ -60,9 +62,20 @@ struct DiscoveryView: View {
                     .cornerRadius(12)
                     .padding(.horizontal)
                     
+                    if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        ProgressiveDiscoveryChatView(
+                            context: $progressiveContext,
+                            onAnswer: {
+                                Task { await performDiscovery() }
+                            }
+                        )
+                        .padding(.horizontal)
+                    }
+                    
                     if searchText.isEmpty && discoveryResult == nil {
                         QuickSuggestionsView(onSelect: { suggestion in
                             searchText = suggestion
+                            progressiveContext = ProgressiveDiscoveryContext()
                             Task { await performDiscovery() }
                         })
                     }
@@ -96,19 +109,45 @@ struct DiscoveryView: View {
     }
     
     private func performDiscovery() async {
-        guard !searchText.isEmpty else { return }
+        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         
         isSearching = true
         discoveryResult = nil
         
         let result = await DiscoveryEngine.shared.discover(
-            interest: searchText,
+            interest: effectiveSearchQuery,
             userMovies: movies,
             userTVShows: tvShows
         )
         
         discoveryResult = result
         isSearching = false
+    }
+    
+    private var effectiveSearchQuery: String {
+        var parts: [String] = [searchText]
+        
+        if let fiction = progressiveContext.fictionPreference {
+            parts.append("Content preference: \(fiction).")
+            switch fiction {
+            case "Fiction":
+                parts.append("narrative, fictional stories")
+            case "Non-Fiction":
+                parts.append("documentary, true story, real events")
+            default:
+                break
+            }
+        }
+        
+        if let format = progressiveContext.formatPreference {
+            parts.append("Preferred format: \(format).")
+        }
+        
+        if let pacing = progressiveContext.pacingPreference {
+            parts.append("Preferred pacing: \(pacing).")
+        }
+        
+        return parts.joined(separator: " ")
     }
 }
 
@@ -155,6 +194,120 @@ struct QuickSuggestionsView: View {
                 }
             }
             .padding(.horizontal)
+        }
+    }
+}
+
+struct ProgressiveDiscoveryContext {
+    var fictionPreference: String?
+    var formatPreference: String?
+    var pacingPreference: String?
+}
+
+private struct ProgressiveDiscoveryChatView: View {
+    @Binding var context: ProgressiveDiscoveryContext
+    let onAnswer: () -> Void
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Guided Discover")
+                .font(.subheadline.weight(.semibold))
+            
+            assistantBubble("Quickly refine your search so recommendations are more precise.")
+            
+            QnABlock(
+                prompt: "Are you looking for fiction or non-fiction?",
+                answer: context.fictionPreference,
+                options: ["Fiction", "Non-Fiction", "Mixed"]
+            ) { selection in
+                context.fictionPreference = selection
+                onAnswer()
+            }
+            
+            if context.fictionPreference != nil {
+                QnABlock(
+                    prompt: "What format do you want right now?",
+                    answer: context.formatPreference,
+                    options: ["Movies", "TV Shows", "Either"]
+                ) { selection in
+                    context.formatPreference = selection
+                    onAnswer()
+                }
+            }
+            
+            if context.formatPreference != nil {
+                QnABlock(
+                    prompt: "What pacing are you in the mood for?",
+                    answer: context.pacingPreference,
+                    options: ["Fast-paced", "Thoughtful", "Balanced"]
+                ) { selection in
+                    context.pacingPreference = selection
+                    onAnswer()
+                }
+            }
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .cornerRadius(12)
+    }
+    
+    @ViewBuilder
+    private func assistantBubble(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "sparkles")
+                .foregroundStyle(.purple)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct QnABlock: View {
+    let prompt: String
+    let answer: String?
+    let options: [String]
+    let onSelect: (String) -> Void
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "brain")
+                    .font(.caption)
+                    .foregroundStyle(.purple)
+                Text(prompt)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            
+            if let answer {
+                HStack {
+                    Spacer()
+                    Text(answer)
+                        .font(.caption.weight(.medium))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.blue.opacity(0.16))
+                        .foregroundStyle(.blue)
+                        .cornerRadius(12)
+                }
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(options, id: \.self) { option in
+                            Button(option) {
+                                onSelect(option)
+                            }
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.blue.opacity(0.1))
+                            .foregroundStyle(.blue)
+                            .cornerRadius(14)
+                        }
+                    }
+                }
+            }
         }
     }
 }
