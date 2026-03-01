@@ -296,7 +296,11 @@ struct DiscoveryView: View {
         return result.recommendations.filter { movie in
             guard !rejected.contains(movie.id) else { return false }
             let coherence = result.movieRecommendationCoherence[movie.id] ?? 0
+            let semantic = result.movieRecommendationSemantic[movie.id] ?? 0
+            let score = result.movieRecommendationScore[movie.id] ?? 0
             return coherence >= coherenceThreshold
+                || semantic >= 0.12
+                || score >= 0.28
         }
     }
 
@@ -305,7 +309,11 @@ struct DiscoveryView: View {
         return result.tvRecommendations.filter { show in
             guard !rejected.contains(show.id) else { return false }
             let coherence = result.tvRecommendationCoherence[show.id] ?? 0
+            let semantic = result.tvRecommendationSemantic[show.id] ?? 0
+            let score = result.tvRecommendationScore[show.id] ?? 0
             return coherence >= coherenceThreshold
+                || semantic >= 0.12
+                || score >= 0.28
         }
     }
 

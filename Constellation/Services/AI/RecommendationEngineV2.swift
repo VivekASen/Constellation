@@ -9,7 +9,7 @@ final class RecommendationEngineV2 {
     private let minimumTVVoteCount = 120
     private let documentaryGenreID = 99
     private let vectorRetriever = LibraryVectorRetriever.shared
-    private let maxCandidateQueries = 10
+    private let maxCandidateQueries = 12
     private let perQueryTake = 5
     private let targetCandidatePool = 26
     private let popularFallbackThreshold = 10
@@ -117,16 +117,32 @@ final class RecommendationEngineV2 {
         let movieLibraryIDs = Set(userMovies.compactMap(\.tmdbID))
         let tvLibraryIDs = Set(userTVShows.compactMap(\.tmdbID))
         
-        let filteredMovies = dedupeMovies(movieCandidatesResolved)
+        var filteredMovies = dedupeMovies(movieCandidatesResolved)
             .filter { !movieLibraryIDs.contains($0.id) }
             .filter { ($0.voteCount ?? 0) >= minimumMovieVoteCount || ($0.voteAverage ?? 0) >= 7.9 }
             .filter { satisfiesMovieIntent($0, intent: intent) }
             .filter { satisfiesMovieTopicConstraint($0, topicConstraint: topicConstraint) }
-        let filteredTVShows = dedupeTVShows(tvCandidatesResolved)
+        var filteredTVShows = dedupeTVShows(tvCandidatesResolved)
             .filter { !tvLibraryIDs.contains($0.id) }
             .filter { ($0.voteCount ?? 0) >= minimumTVVoteCount || ($0.voteAverage ?? 0) >= 8.0 }
             .filter { satisfiesTVIntent($0, intent: intent) }
             .filter { satisfiesTVTopicConstraint($0, topicConstraint: topicConstraint) }
+
+        // If strict topical guards eliminate everything, fall back to a relaxed topical pass
+        // so users still get meaningful results instead of a dead end.
+        if filteredMovies.isEmpty && filteredTVShows.isEmpty && topicConstraint.isActive {
+            filteredMovies = dedupeMovies(movieCandidatesResolved)
+                .filter { !movieLibraryIDs.contains($0.id) }
+                .filter { ($0.voteCount ?? 0) >= 20 || ($0.voteAverage ?? 0) >= 6.2 }
+                .filter { satisfiesMovieIntent($0, intent: intent) }
+                .filter { satisfiesMovieTopicConstraintRelaxed($0, topicConstraint: topicConstraint) }
+
+            filteredTVShows = dedupeTVShows(tvCandidatesResolved)
+                .filter { !tvLibraryIDs.contains($0.id) }
+                .filter { ($0.voteCount ?? 0) >= 20 || ($0.voteAverage ?? 0) >= 6.2 }
+                .filter { satisfiesTVIntent($0, intent: intent) }
+                .filter { satisfiesTVTopicConstraintRelaxed($0, topicConstraint: topicConstraint) }
+        }
         
         let movieRanks = rankMovies(
             filteredMovies,
@@ -564,6 +580,13 @@ final class RecommendationEngineV2 {
         return topicConstraint.matches(normalizedText: normalizedText, tokens: tokens)
     }
 
+    private func satisfiesMovieTopicConstraintRelaxed(_ movie: TMDBMovie, topicConstraint: TopicConstraint) -> Bool {
+        guard topicConstraint.isActive else { return true }
+        let normalizedText = normalize([movie.title, movie.overview ?? ""].joined(separator: " "))
+        let tokens = tokenize(normalizedText)
+        return topicConstraint.relaxedMatches(normalizedText: normalizedText, tokens: tokens)
+    }
+
     private func satisfiesTVIntent(_ show: TMDBTVShow, intent: RecommendationIntent) -> Bool {
         if intent.mediaMode == .movieOnly { return false }
         guard intent.documentaryOnly else { return true }
@@ -579,6 +602,13 @@ final class RecommendationEngineV2 {
         let normalizedText = normalize([show.title, show.overview ?? ""].joined(separator: " "))
         let tokens = tokenize(normalizedText)
         return topicConstraint.matches(normalizedText: normalizedText, tokens: tokens)
+    }
+
+    private func satisfiesTVTopicConstraintRelaxed(_ show: TMDBTVShow, topicConstraint: TopicConstraint) -> Bool {
+        guard topicConstraint.isActive else { return true }
+        let normalizedText = normalize([show.title, show.overview ?? ""].joined(separator: " "))
+        let tokens = tokenize(normalizedText)
+        return topicConstraint.relaxedMatches(normalizedText: normalizedText, tokens: tokens)
     }
     
     private func jaccard(_ a: Set<String>, _ b: Set<String>) -> Double {
@@ -735,6 +765,17 @@ private struct TopicConstraint {
             return tokenHits >= min(2, max(1, requiredTokens.count))
         }
         return tokenHits >= 1
+    }
+
+    func relaxedMatches(normalizedText: String, tokens: Set<String>) -> Bool {
+        guard isActive else { return true }
+        let phraseHit = requiredPhrases.contains { normalizedText.contains($0) }
+        if phraseHit { return true }
+
+        if !mustContainAny.isEmpty {
+            return tokens.intersection(mustContainAny).count > 0
+        }
+        return tokens.intersection(requiredTokens).count > 0
     }
 }
 
