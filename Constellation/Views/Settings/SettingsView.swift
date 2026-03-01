@@ -9,6 +9,10 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage("theme.semanticMatchThreshold") private var semanticThreshold = 0.79
+    @AppStorage("recommend.semanticWeight") private var recommendationSemanticWeight = 0.58
+    @AppStorage("recommend.qualityWeight") private var recommendationQualityWeight = 0.28
+    @AppStorage("recommend.noveltyWeight") private var recommendationNoveltyWeight = 0.14
+    @AppStorage("recommend.diversityBalance") private var recommendationDiversityBalance = 0.78
     
     var body: some View {
         NavigationStack {
@@ -35,6 +39,33 @@ struct SettingsView: View {
                     }
                 }
                 
+                Section("Recommendation Ranking") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        weightRow(title: "Semantic", value: recommendationSemanticWeight)
+                        Slider(value: $recommendationSemanticWeight, in: 0.10...0.85, step: 0.01)
+                        
+                        weightRow(title: "Quality", value: recommendationQualityWeight)
+                        Slider(value: $recommendationQualityWeight, in: 0.05...0.80, step: 0.01)
+                        
+                        weightRow(title: "Novelty", value: recommendationNoveltyWeight)
+                        Slider(value: $recommendationNoveltyWeight, in: 0.05...0.60, step: 0.01)
+                        
+                        weightRow(title: "Diversity Balance", value: recommendationDiversityBalance)
+                        Slider(value: $recommendationDiversityBalance, in: 0.40...0.95, step: 0.01)
+                        
+                        Text("Higher semantic weight favors close topical matches. Higher novelty boosts less similar-to-library picks. Diversity balance controls result variety.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    Button("Reset Recommendation Defaults") {
+                        recommendationSemanticWeight = 0.58
+                        recommendationQualityWeight = 0.28
+                        recommendationNoveltyWeight = 0.14
+                        recommendationDiversityBalance = 0.78
+                    }
+                }
+                
                 Section("Notes") {
                     Text("This setting affects new theme normalization during extraction and discovery.")
                         .font(.footnote)
@@ -42,6 +73,17 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+        }
+    }
+    
+    @ViewBuilder
+    private func weightRow(title: String, value: Double) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(String(format: "%.2f", value))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
         }
     }
 }

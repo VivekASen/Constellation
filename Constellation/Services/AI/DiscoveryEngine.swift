@@ -10,30 +10,14 @@ import SwiftData
 
 class DiscoveryEngine {
     static let shared = DiscoveryEngine()
-    
-    private let genericSuggestionTerms: Set<String> = [
-        "action", "adventure", "fantasy", "drama", "thriller", "horror",
-        "comedy", "romance", "sci fi", "sci-fi", "science fiction", "documentary",
-        "mystery", "crime", "animation", "family", "war", "western", "history"
-    ]
-    
-    private let recommendationSeeds: [String: [String]] = [
-        "space": ["Interstellar", "The Martian", "Apollo 13", "Gravity", "The Expanse", "For All Mankind"],
-        "space exploration": ["Interstellar", "The Martian", "Apollo 13", "Gravity", "The Expanse", "For All Mankind"],
-        "astronaut": ["Interstellar", "The Martian", "Apollo 13", "First Man", "For All Mankind"],
-        "time travel": ["Dark", "Looper", "12 Monkeys", "Predestination", "Edge of Tomorrow"],
-        "artificial intelligence": ["Ex Machina", "Her", "Blade Runner 2049", "Westworld", "Person of Interest"],
-        "murder mystery": ["Knives Out", "Se7en", "True Detective", "Sherlock", "Zodiac"],
-        "political intrigue": ["House of Cards", "The West Wing", "The Ides of March", "Tinker Tailor Soldier Spy"],
-        "fantasy": ["The Lord of the Rings", "Game of Thrones", "The Witcher", "House of the Dragon"]
-    ]
+    private let recommendationEngine = RecommendationEngineV2.shared
     
     private init() {}
     
     func discover(interest: String, userMovies: [Movie], userTVShows: [TVShow]) async -> DiscoveryResult {
         let understanding = await understandQuery(interest)
         
-        let recommendations = await getSmartRecommendations(
+        let recommendationResult = await recommendationEngine.recommend(
             query: interest,
             understanding: understanding,
             userMovies: userMovies,
@@ -47,8 +31,8 @@ class DiscoveryEngine {
             understanding: understanding,
             movieMatches: movieMatches,
             tvMatches: tvMatches,
-            movieRecommendations: recommendations.movies,
-            tvRecommendations: recommendations.tvShows
+            movieRecommendations: recommendationResult.movies.map(\.movie),
+            tvRecommendations: recommendationResult.tvShows.map(\.show)
         )
         
         return DiscoveryResult(
@@ -56,8 +40,14 @@ class DiscoveryEngine {
             understanding: understanding,
             inLibraryMovies: movieMatches,
             inLibraryTVShows: tvMatches,
-            recommendations: recommendations.movies,
-            tvRecommendations: recommendations.tvShows,
+            recommendations: recommendationResult.movies.map(\.movie),
+            tvRecommendations: recommendationResult.tvShows.map(\.show),
+            movieRecommendationReasons: Dictionary(
+                uniqueKeysWithValues: recommendationResult.movies.map { ($0.movie.id, $0.reasons.joined(separator: " • ")) }
+            ),
+            tvRecommendationReasons: Dictionary(
+                uniqueKeysWithValues: recommendationResult.tvShows.map { ($0.show.id, $0.reasons.joined(separator: " • ")) }
+            ),
             followUpQuestions: questions,
             connections: findConnections(inMovies: movieMatches, tvShows: tvMatches)
         )
@@ -87,65 +77,6 @@ class DiscoveryEngine {
             print("Understanding error: \(error)")
             return fallbackUnderstanding(for: query)
         }
-    }
-    
-    private func getSmartRecommendations(
-        query: String,
-        understanding: QueryUnderstanding,
-        userMovies: [Movie],
-        userTVShows: [TVShow]
-    ) async -> (movies: [TMDBMovie], tvShows: [TMDBTVShow]) {
-        let candidateTitles = recommendationTitleCandidates(query: query, understanding: understanding)
-        var movieResults: [TMDBMovie] = []
-        var tvResults: [TMDBTVShow] = []
-        
-        for title in candidateTitles.prefix(6) {
-            if let results = try? await TMDBService.shared.searchMovies(query: title) {
-                movieResults.append(contentsOf: results.prefix(3))
-            }
-            if let results = try? await TMDBService.shared.searchTVShows(query: title) {
-                tvResults.append(contentsOf: results.prefix(3))
-            }
-        }
-        
-        if let queryMovies = try? await TMDBService.shared.searchMovies(query: query) {
-            movieResults.append(contentsOf: queryMovies.prefix(8))
-        }
-        if let queryTV = try? await TMDBService.shared.searchTVShows(query: query) {
-            tvResults.append(contentsOf: queryTV.prefix(8))
-        }
-        
-        if movieResults.count < 4, let popularMovies = try? await TMDBService.shared.getPopularMovies() {
-            movieResults.append(contentsOf: popularMovies.prefix(10))
-        }
-        if tvResults.count < 4, let popularTV = try? await TMDBService.shared.getPopularTVShows() {
-            tvResults.append(contentsOf: popularTV.prefix(10))
-        }
-        
-        let userMovieIDs = Set(userMovies.compactMap(\.tmdbID))
-        let userShowIDs = Set(userTVShows.compactMap(\.tmdbID))
-        
-        let uniqueMovies = Dictionary(grouping: movieResults, by: \.id)
-            .compactMap { $0.value.first }
-            .filter { !userMovieIDs.contains($0.id) }
-            .sorted {
-                if ($0.voteAverage ?? 0) == ($1.voteAverage ?? 0) {
-                    return $0.title < $1.title
-                }
-                return ($0.voteAverage ?? 0) > ($1.voteAverage ?? 0)
-            }
-        
-        let uniqueTVShows = Dictionary(grouping: tvResults, by: \.id)
-            .compactMap { $0.value.first }
-            .filter { !userShowIDs.contains($0.id) }
-            .sorted {
-                if ($0.voteAverage ?? 0) == ($1.voteAverage ?? 0) {
-                    return $0.title < $1.title
-                }
-                return ($0.voteAverage ?? 0) > ($1.voteAverage ?? 0)
-            }
-        
-        return (movies: Array(uniqueMovies.prefix(8)), tvShows: Array(uniqueTVShows.prefix(8)))
     }
     
     private func findIntelligentMovieMatches(
@@ -316,54 +247,6 @@ class DiscoveryEngine {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
-    private func recommendationTitleCandidates(query: String, understanding: QueryUnderstanding) -> [String] {
-        let normalizedQuery = normalizeForCompare(query)
-        var candidates: [String] = []
-        
-        candidates.append(query)
-        
-        for suggestion in understanding.suggestions {
-            if isConcreteSuggestion(suggestion) {
-                candidates.append(suggestion)
-            }
-        }
-        
-        let seedKeys = [normalizedQuery] + understanding.themes.map(normalizeForCompare) + understanding.genres.map(normalizeForCompare)
-        for key in seedKeys {
-            if let seeds = recommendationSeeds[key] {
-                candidates.append(contentsOf: seeds)
-            } else {
-                let partial = recommendationSeeds.keys.first { key.contains($0) || $0.contains(key) }
-                if let partial, let seeds = recommendationSeeds[partial] {
-                    candidates.append(contentsOf: seeds)
-                }
-            }
-        }
-        
-        let deduped = Array(NSOrderedSet(array: candidates.compactMap { cleanedSuggestion($0) })) as? [String] ?? []
-        return deduped.filter(isConcreteSuggestion)
-    }
-    
-    private func cleanedSuggestion(_ text: String) -> String? {
-        let normalized = normalizeForCompare(text)
-        guard !normalized.isEmpty else { return nil }
-        return normalized
-            .split(separator: " ")
-            .map { String($0).capitalized }
-            .joined(separator: " ")
-    }
-    
-    private func isConcreteSuggestion(_ suggestion: String) -> Bool {
-        let normalized = normalizeForCompare(suggestion)
-        guard !normalized.isEmpty else { return false }
-        guard normalized.count >= 4 else { return false }
-        if genericSuggestionTerms.contains(normalized) { return false }
-        if normalized.split(separator: " ").count == 1, genericSuggestionTerms.contains(normalized) {
-            return false
-        }
-        return true
-    }
-    
     private func callOllamaForJSON(prompt: String) async throws -> String {
         let url = URL(string: "http://localhost:11434/api/generate")!
         var request = URLRequest(url: url)
@@ -411,28 +294,32 @@ class DiscoveryEngine {
         let normalized = normalizeForCompare(query)
         let themes = ThemeExtractor.shared.normalizeThemes([normalized])
         
-        let genres = genericSuggestionTerms
+        let genres = [
+            "action", "adventure", "fantasy", "drama", "thriller", "horror",
+            "comedy", "romance", "science fiction", "documentary", "mystery", "crime"
+        ]
             .filter { normalized.contains($0) }
             .sorted()
-        
-        let seedSuggestions = recommendationSeeds
-            .first { normalized.contains($0.key) || $0.key.contains(normalized) }?
-            .value ?? []
         
         return QueryUnderstanding(
             themes: themes,
             genres: genres,
             mood: normalized,
             isGenre: !genres.isEmpty,
-            suggestions: seedSuggestions
+            suggestions: []
         )
     }
     
     private func enrichUnderstanding(_ understanding: QueryUnderstanding, for query: String) -> QueryUnderstanding {
-        var suggestions = understanding.suggestions.filter(isConcreteSuggestion)
+        let cleanSuggestions = understanding.suggestions
+            .map(normalizeForCompare)
+            .filter { $0.count >= 4 }
+            .map {
+                $0.split(separator: " ").map { String($0).capitalized }.joined(separator: " ")
+            }
+        var suggestions = cleanSuggestions
         if suggestions.isEmpty {
-            let fallback = fallbackUnderstanding(for: query)
-            suggestions = fallback.suggestions
+            suggestions = [query]
         }
         
         let themes = understanding.themes.isEmpty
@@ -474,6 +361,8 @@ struct DiscoveryResult {
     let inLibraryTVShows: [TVShow]
     let recommendations: [TMDBMovie]
     let tvRecommendations: [TMDBTVShow]
+    let movieRecommendationReasons: [Int: String]
+    let tvRecommendationReasons: [Int: String]
     let followUpQuestions: [FollowUpQuestion]
     let connections: [Connection]
     

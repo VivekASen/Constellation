@@ -379,7 +379,10 @@ struct SmartDiscoveryResultsView: View {
                     .padding(.horizontal)
                     
                     ForEach(filteredRecommendations) { movie in
-                        RecommendationMovieCard(movie: movie)
+                        RecommendationMovieCard(
+                            movie: movie,
+                            reason: result.movieRecommendationReasons[movie.id]
+                        )
                             .onTapGesture {
                                 onAddMovie(movie)
                             }
@@ -409,7 +412,10 @@ struct SmartDiscoveryResultsView: View {
                     .padding(.horizontal)
                     
                     ForEach(filteredTVRecommendations) { show in
-                        RecommendationTVShowCard(show: show)
+                        RecommendationTVShowCard(
+                            show: show,
+                            reason: result.tvRecommendationReasons[show.id]
+                        )
                     }
                 }
             }
@@ -603,6 +609,7 @@ struct LibraryTVShowCard: View {
 
 struct RecommendationMovieCard: View {
     let movie: TMDBMovie
+    let reason: String?
     
     var body: some View {
         HStack(spacing: 12) {
@@ -641,6 +648,13 @@ struct RecommendationMovieCard: View {
                     }
                     .foregroundStyle(.yellow)
                 }
+                
+                if let reason, !reason.isEmpty {
+                    Text(reason)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             }
             
             Spacer()
@@ -662,6 +676,7 @@ struct RecommendationMovieCard: View {
 
 struct RecommendationTVShowCard: View {
     let show: TMDBTVShow
+    let reason: String?
     
     var body: some View {
         HStack(spacing: 12) {
@@ -699,6 +714,13 @@ struct RecommendationTVShowCard: View {
                             .font(.caption)
                     }
                     .foregroundStyle(.yellow)
+                }
+                
+                if let reason, !reason.isEmpty {
+                    Text(reason)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
             }
             
