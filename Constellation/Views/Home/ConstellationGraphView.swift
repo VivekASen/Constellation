@@ -22,6 +22,7 @@ struct ConstellationGraphView: View {
     @State private var densityMode: ConstellationGraphDensityMode = .simple
     @State private var labelDensity: ConstellationGraphLabelDensity = .medium
     @State private var homeResetToken: Int = 0
+    @State private var hasHomeGraphInteraction = false
     
     @State private var selectedMovie: Movie?
     @State private var selectedTVShow: TVShow?
@@ -53,17 +54,6 @@ struct ConstellationGraphView: View {
                 
                 Spacer()
                 
-                Button {
-                    resetViewport()
-                } label: {
-                    Label("Reset", systemImage: "scope")
-                        .font(.caption)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.gray.opacity(0.14))
-                        .clipShape(Capsule())
-                }
-                
                 BrainPortalButton {
                     showImmersiveMode = true
                 }
@@ -79,12 +69,39 @@ struct ConstellationGraphView: View {
                         edges: homeEdges,
                         selectedNodeID: $selectedNodeID,
                         resetToken: homeResetToken,
+                        onInteraction: {
+                            hasHomeGraphInteraction = true
+                        },
                         onOpenNode: { nodeID in
                             guard let node = homeNodes.first(where: { $0.id == nodeID }) else { return }
                             openNode(node)
                         }
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 16))
+                    
+                    if hasHomeGraphInteraction {
+                        VStack {
+                            HStack {
+                                Button {
+                                    resetViewport()
+                                } label: {
+                                    Label("Reset", systemImage: "scope")
+                                        .font(.caption.weight(.semibold))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(Color.black.opacity(0.35))
+                                        .foregroundStyle(.white)
+                                        .clipShape(Capsule())
+                                }
+                                .buttonStyle(.plain)
+                                
+                                Spacer()
+                            }
+                            Spacer()
+                        }
+                        .padding(12)
+                        .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topLeading)))
+                    }
                     
                     if homeNodes.isEmpty {
                         ContentUnavailableView(
@@ -323,6 +340,7 @@ struct ConstellationGraphView: View {
     private func resetViewport() {
         selectedNodeID = nil
         homeResetToken += 1
+        hasHomeGraphInteraction = false
     }
     
     private func ringPosition(index: Int, total: Int, radius: CGFloat, phase: CGFloat) -> CGPoint {

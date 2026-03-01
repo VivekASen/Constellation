@@ -192,6 +192,9 @@
     function markInteraction() {
       lastInteractionAt = Date.now();
       autoSpin = false;
+      if (window.webkit?.messageHandlers?.interaction) {
+        window.webkit.messageHandlers.interaction.postMessage("1");
+      }
     }
     
     function roundRect(x, y, w, h, r) {

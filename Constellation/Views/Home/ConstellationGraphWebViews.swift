@@ -9,6 +9,7 @@ struct Constellation3DPreviewWebView: UIViewRepresentable {
     let edges: [ConstellationGraphEdge]
     @Binding var selectedNodeID: String?
     let resetToken: Int
+    let onInteraction: () -> Void
     let onOpenNode: (String) -> Void
     
     // MARK: - UIViewRepresentable
@@ -21,6 +22,7 @@ struct Constellation3DPreviewWebView: UIViewRepresentable {
         let userContent = WKUserContentController()
         userContent.add(context.coordinator, name: "nodeTap")
         userContent.add(context.coordinator, name: "nodeOpen")
+        userContent.add(context.coordinator, name: "interaction")
         config.userContentController = userContent
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         
@@ -30,7 +32,7 @@ struct Constellation3DPreviewWebView: UIViewRepresentable {
         webView.scrollView.backgroundColor = .clear
         webView.navigationDelegate = context.coordinator
         context.coordinator.webView = webView
-        context.coordinator.pushBindings(selectedNodeID: $selectedNodeID, onOpenNode: onOpenNode)
+        context.coordinator.pushBindings(selectedNodeID: $selectedNodeID, onOpenNode: onOpenNode, onInteraction: onInteraction)
         
         if let rendered = context.coordinator.initialHTML(payload: payload()) {
             webView.loadHTMLString(rendered.html, baseURL: rendered.baseURL)
@@ -40,7 +42,7 @@ struct Constellation3DPreviewWebView: UIViewRepresentable {
     }
     
     func updateUIView(_ uiView: WKWebView, context: Context) {
-        context.coordinator.pushBindings(selectedNodeID: $selectedNodeID, onOpenNode: onOpenNode)
+        context.coordinator.pushBindings(selectedNodeID: $selectedNodeID, onOpenNode: onOpenNode, onInteraction: onInteraction)
         context.coordinator.pushGraph(payload(), selectedNodeID: selectedNodeID, resetToken: resetToken)
     }
     
@@ -73,11 +75,17 @@ struct Constellation3DPreviewWebView: UIViewRepresentable {
         private var lastResetToken: Int = 0
         private var setSelectedNode: (String?) -> Void = { _ in }
         private var openNode: (String) -> Void = { _ in }
+        private var interaction: () -> Void = {}
         
         // MARK: - Bindings
-        func pushBindings(selectedNodeID: Binding<String?>, onOpenNode: @escaping (String) -> Void) {
+        func pushBindings(
+            selectedNodeID: Binding<String?>,
+            onOpenNode: @escaping (String) -> Void,
+            onInteraction: @escaping () -> Void
+        ) {
             self.setSelectedNode = { selectedNodeID.wrappedValue = $0 }
             self.openNode = onOpenNode
+            self.interaction = onInteraction
         }
         
         // MARK: - Graph Sync
@@ -117,6 +125,11 @@ struct Constellation3DPreviewWebView: UIViewRepresentable {
         
         // MARK: - WKScriptMessageHandler
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            if message.name == "interaction" {
+                interaction()
+                return
+            }
+            
             guard let id = message.body as? String else { return }
             if message.name == "nodeTap" {
                 setSelectedNode(id)
