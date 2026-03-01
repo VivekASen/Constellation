@@ -43,52 +43,57 @@ struct DiscoveryView: View {
                             }
 
                             ForEach(turns) { turn in
+                                let display = displayPreference(for: turn.userText)
                                 userBubble(turn.userText)
 
                                 if let summary = turn.assistantSummary {
                                     assistantBubble(summary)
                                 }
 
-                                if let movie = turn.result?.recommendations.first {
-                                    let isAdded = isMovieInLibrary(movie.id)
-                                    mediaBubble(
-                                        title: movie.title,
-                                        subtitle: mediaSubtitle(year: movie.year, rating: movie.voteAverage),
-                                        reason: turn.result?.movieRecommendationReasons[movie.id] ?? "Strong fit for your request",
-                                        posterURL: movie.posterURL,
-                                        emoji: "🎬",
-                                        actionTitle: isAdded ? "Added" : "Add Movie",
-                                        isAdded: isAdded,
-                                        action: {
-                                            pendingMovieForAddFeedback = movie
-                                            showingAddMovie = movie
-                                        },
-                                        onTap: {
-                                            pendingMovieForAddFeedback = movie
-                                            showingAddMovie = movie
-                                        }
-                                    )
+                                if let result = turn.result, display.movieLimit > 0 {
+                                    ForEach(Array(result.recommendations.prefix(display.movieLimit))) { movie in
+                                        let isAdded = isMovieInLibrary(movie.id)
+                                        mediaBubble(
+                                            title: movie.title,
+                                            subtitle: mediaSubtitle(year: movie.year, rating: movie.voteAverage),
+                                            reason: result.movieRecommendationReasons[movie.id] ?? "Strong fit for your request",
+                                            posterURL: movie.posterURL,
+                                            emoji: "🎬",
+                                            actionTitle: isAdded ? "Added" : "Add Movie",
+                                            isAdded: isAdded,
+                                            action: {
+                                                pendingMovieForAddFeedback = movie
+                                                showingAddMovie = movie
+                                            },
+                                            onTap: {
+                                                pendingMovieForAddFeedback = movie
+                                                showingAddMovie = movie
+                                            }
+                                        )
+                                    }
                                 }
 
-                                if let show = turn.result?.tvRecommendations.first {
-                                    let isAdded = isTVInLibrary(show.id)
-                                    mediaBubble(
-                                        title: show.title,
-                                        subtitle: mediaSubtitle(year: show.year, rating: show.voteAverage),
-                                        reason: turn.result?.tvRecommendationReasons[show.id] ?? "Strong fit for your request",
-                                        posterURL: show.posterURL,
-                                        emoji: "📺",
-                                        actionTitle: isAdded ? "Added" : "Add TV Show",
-                                        isAdded: isAdded,
-                                        action: {
-                                            pendingTVForAddFeedback = show
-                                            showingAddTVShow = show
-                                        },
-                                        onTap: {
-                                            pendingTVForAddFeedback = show
-                                            showingAddTVShow = show
-                                        }
-                                    )
+                                if let result = turn.result, display.tvLimit > 0 {
+                                    ForEach(Array(result.tvRecommendations.prefix(display.tvLimit))) { show in
+                                        let isAdded = isTVInLibrary(show.id)
+                                        mediaBubble(
+                                            title: show.title,
+                                            subtitle: mediaSubtitle(year: show.year, rating: show.voteAverage),
+                                            reason: result.tvRecommendationReasons[show.id] ?? "Strong fit for your request",
+                                            posterURL: show.posterURL,
+                                            emoji: "📺",
+                                            actionTitle: isAdded ? "Added" : "Add TV Show",
+                                            isAdded: isAdded,
+                                            action: {
+                                                pendingTVForAddFeedback = show
+                                                showingAddTVShow = show
+                                            },
+                                            onTap: {
+                                                pendingTVForAddFeedback = show
+                                                showingAddTVShow = show
+                                            }
+                                        )
+                                    }
                                 }
 
                                 if let result = turn.result,
@@ -250,7 +255,7 @@ struct DiscoveryView: View {
             userTVShows: tvShows
         )
 
-        turn.assistantSummary = conversationState.summaryLine
+        turn.assistantSummary = assistantSummary(for: message)
         turn.result = discovery
 
         if let lastIndex = turns.indices.last {
@@ -302,8 +307,28 @@ struct DiscoveryView: View {
         if containsAny(normalized, terms: ["movie only", "movies only", "film only", "films only"]) {
             conversationState.mediaMode = .movieOnly
             applied = true
-        } else if containsAny(normalized, terms: ["tv only", "show only", "shows only", "series only", "tv shows only"]) {
+        } else if containsAny(normalized, terms: [
+            "tv only",
+            "show only",
+            "shows only",
+            "series only",
+            "tv shows only",
+            "tv suggestion",
+            "tv suggestions",
+            "show suggestions",
+            "more tv",
+            "more shows"
+        ]) {
             conversationState.mediaMode = .tvOnly
+            applied = true
+        } else if containsAny(normalized, terms: [
+            "movie suggestion",
+            "movie suggestions",
+            "film suggestions",
+            "more movies",
+            "more films"
+        ]) {
+            conversationState.mediaMode = .movieOnly
             applied = true
         } else if containsAny(normalized, terms: ["both", "either", "any format"]) {
             conversationState.mediaMode = .any
@@ -343,6 +368,60 @@ struct DiscoveryView: View {
 
     private func containsAny(_ text: String, terms: [String]) -> Bool {
         terms.contains { text.contains($0) }
+    }
+
+    private func displayPreference(for message: String) -> TurnDisplayPreference {
+        let normalized = normalizedIntentText(message)
+        let isMore = containsAny(normalized, terms: [
+            "more",
+            "another",
+            "anything else",
+            "similar",
+            "keep going",
+            "next suggestion",
+            "next suggestions"
+        ])
+        let wantsTV = containsAny(normalized, terms: ["tv", "show", "shows", "series"])
+        let wantsMovies = containsAny(normalized, terms: ["movie", "movies", "film", "films"])
+
+        if wantsTV && !wantsMovies {
+            return TurnDisplayPreference(movieLimit: 0, tvLimit: isMore ? 3 : 2)
+        }
+        if wantsMovies && !wantsTV {
+            return TurnDisplayPreference(movieLimit: isMore ? 3 : 2, tvLimit: 0)
+        }
+        if isMore {
+            return TurnDisplayPreference(movieLimit: 2, tvLimit: 2)
+        }
+        return TurnDisplayPreference(movieLimit: 1, tvLimit: 1)
+    }
+
+    private func assistantSummary(for message: String) -> String {
+        let normalized = normalizedIntentText(message)
+        let wantsMore = containsAny(normalized, terms: ["more", "another", "anything else", "similar", "keep going"])
+
+        switch conversationState.mediaMode {
+        case .tvOnly:
+            return wantsMore
+                ? "Great, here are more TV suggestions in the same lane."
+                : "Got it, I’ll focus on TV suggestions."
+        case .movieOnly:
+            return wantsMore
+                ? "Great, here are more movie suggestions in the same lane."
+                : "Got it, I’ll focus on movie suggestions."
+        case .any:
+            break
+        }
+
+        if conversationState.documentaryOnly {
+            return wantsMore
+                ? "Great, here are more documentary picks."
+                : "Got it, I’ll keep this strictly documentary."
+        }
+
+        return wantsMore
+            ? "Great, here are a few more strong picks."
+            : "Got it. Here are the best matches I found."
     }
 
     private func isMovieInLibrary(_ tmdbID: Int) -> Bool {
@@ -538,6 +617,11 @@ private struct DiscoveryChatTurn: Identifiable {
     let userText: String
     var assistantSummary: String?
     var result: DiscoveryResult?
+}
+
+private struct TurnDisplayPreference {
+    let movieLimit: Int
+    let tvLimit: Int
 }
 
 private struct DiscoveryConversationState {
