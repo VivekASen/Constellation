@@ -1,0 +1,258 @@
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <style>
+    html, body {
+      margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
+      background: radial-gradient(circle at 20% 15%, #142047 0%, #0a1233 38%, #050c24 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    }
+    #root { width: 100%; height: 100%; }
+    .link { stroke: rgba(210, 220, 255, 0.4); stroke-linecap: round; }
+    .node circle { stroke: rgba(255,255,255,0.2); stroke-width: 1.2px; }
+    .node text {
+      fill: rgba(242, 246, 255, 0.95);
+      font-size: 11px;
+      paint-order: stroke;
+      stroke: rgba(5, 12, 36, 0.95);
+      stroke-width: 3.2px;
+      stroke-linejoin: round;
+      pointer-events: none;
+    }
+    .node.selected circle { stroke: rgba(255,255,255,0.85); stroke-width: 2.5px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script>
+    const initialGraph = __INITIAL_GRAPH_JSON__;
+    let graph = initialGraph;
+    let selectedNodeId = null;
+    let zoomRef = null;
+    let svgRef = null;
+    let stageRef = null;
+    let simulation = null;
+    let lastTapAt = { time: 0, id: null };
+    let sparkTimer = null;
+    
+    function canShowLabel(node, density, neighbors) {
+      if (node.id === selectedNodeId) return true;
+      if (neighbors.has(node.id)) return true;
+      if (density === "high") return true;
+      if (density === "medium") return node.kind === "theme";
+      return false;
+    }
+    
+    function neighborSet(links, id) {
+      const result = new Set();
+      if (!id) return result;
+      for (const link of links) {
+        const a = typeof link.source === "object" ? link.source.id : link.source;
+        const b = typeof link.target === "object" ? link.target.id : link.target;
+        if (a === id) result.add(b);
+        if (b === id) result.add(a);
+      }
+      return result;
+    }
+    
+    function render() {
+      if (!window.d3) return;
+      if (sparkTimer) {
+        sparkTimer.stop();
+      }
+      
+      const root = document.getElementById("root");
+      const width = root.clientWidth || 320;
+      const height = root.clientHeight || 300;
+      root.innerHTML = "";
+      
+      svgRef = d3.select(root).append("svg")
+        .attr("width", width)
+        .attr("height", height);
+      
+      const stage = svgRef.append("g");
+      stageRef = stage;
+      
+      zoomRef = d3.zoom()
+        .scaleExtent([0.45, 3.5])
+        .on("zoom", (event) => stage.attr("transform", event.transform));
+      svgRef.call(zoomRef);
+      
+      const links = graph.links.map((d) => ({ ...d }));
+      const nodes = graph.nodes.map((d) => ({ ...d }));
+      const nodeById = new Map(nodes.map((n) => [n.id, n]));
+      const neighbors = neighborSet(links, selectedNodeId);
+      
+      const link = stage.append("g")
+        .selectAll("line")
+        .data(links)
+        .join("line")
+        .attr("class", "link")
+        .attr("stroke-width", (d) => Math.min(2.8, 1 + d.weight * 0.45))
+        .attr("stroke-opacity", (d) => {
+          if (!selectedNodeId) return 0.38;
+          const a = typeof d.source === "object" ? d.source.id : d.source;
+          const b = typeof d.target === "object" ? d.target.id : d.target;
+          return (a === selectedNodeId || b === selectedNodeId) ? 0.88 : 0.1;
+        });
+      
+      const kindOf = (endpoint) => {
+        if (typeof endpoint === "object") return endpoint.kind;
+        return nodeById.get(endpoint)?.kind;
+      };
+      const themeLinks = links.filter((l) => kindOf(l.source) === "theme" || kindOf(l.target) === "theme");
+      const sparkCount = Math.max(0, Math.min(16, Math.floor(themeLinks.length * 0.45)));
+      const sparks = Array.from({ length: sparkCount }, (_, i) => ({
+        id: i,
+        linkIndex: i % Math.max(1, themeLinks.length),
+        phase: (i * 0.6180339) % 1,
+        speed: 0.14 + ((i * 7) % 5) * 0.018,
+      }));
+      const sparkLayer = stage.append("g")
+        .style("pointer-events", "none")
+        .selectAll("circle")
+        .data(sparks)
+        .join("circle")
+        .attr("r", 0)
+        .attr("fill", "#a5f3fc")
+        .attr("opacity", 0);
+      
+      const node = stage.append("g")
+        .selectAll("g")
+        .data(nodes)
+        .join("g")
+        .attr("class", (d) => d.id === selectedNodeId ? "node selected" : "node")
+        .style("cursor", "pointer")
+        .on("click", (_, d) => {
+          const now = Date.now();
+          const isDoubleTap = lastTapAt.id === d.id && (now - lastTapAt.time) < 320;
+          lastTapAt.time = now;
+          lastTapAt.id = d.id;
+          
+          selectedNodeId = d.id;
+          if (window.webkit?.messageHandlers?.nodeTap) {
+            window.webkit.messageHandlers.nodeTap.postMessage(d.id);
+          }
+          
+          if (isDoubleTap && window.webkit?.messageHandlers?.nodeOpen) {
+            window.webkit.messageHandlers.nodeOpen.postMessage(d.id);
+          }
+          
+          render();
+        })
+        .on("dblclick", (event, d) => {
+          event.preventDefault();
+          if (window.webkit?.messageHandlers?.nodeOpen) {
+            window.webkit.messageHandlers.nodeOpen.postMessage(d.id);
+          }
+        });
+      
+      node.append("circle")
+        .attr("r", (d) => d.id === selectedNodeId ? 11.5 : 9.4)
+        .attr("fill", (d) => d.color)
+        .attr("fill-opacity", (d) => {
+          if (!selectedNodeId) return 0.95;
+          return (d.id === selectedNodeId || neighbors.has(d.id)) ? 0.98 : 0.32;
+        });
+      
+      node.append("text")
+        .attr("dy", -13)
+        .attr("text-anchor", "middle")
+        .style("display", (d) => canShowLabel(d, graph.labelDensity, neighbors) ? "block" : "none")
+        .text((d) => d.title);
+      
+      simulation = d3.forceSimulation(nodes)
+        .force("link", d3.forceLink(links).id((d) => d.id).distance((d) => 90 + (d.weight || 1) * 4))
+        .force("charge", d3.forceManyBody().strength(-260))
+        .force("center", d3.forceCenter(width / 2, height / 2))
+        .force("collision", d3.forceCollide().radius((d) => d.id === selectedNodeId ? 24 : 20))
+        .alpha(0.95)
+        .alphaDecay(0.028);
+      
+      function animateSparks(t) {
+        sparkLayer
+          .attr("cx", (s) => {
+            const l = themeLinks[s.linkIndex];
+            if (!l || !l.source || !l.target) return -100;
+            const p = (t * s.speed + s.phase) % 1;
+            return l.source.x + (l.target.x - l.source.x) * p;
+          })
+          .attr("cy", (s) => {
+            const l = themeLinks[s.linkIndex];
+            if (!l || !l.source || !l.target) return -100;
+            const p = (t * s.speed + s.phase) % 1;
+            return l.source.y + (l.target.y - l.source.y) * p;
+          })
+          .attr("r", (s) => {
+            const flicker = (Math.sin(t * 2.1 + s.phase * 11) + 1) * 0.5;
+            return flicker > 0.73 ? 1.7 : 0;
+          })
+          .attr("opacity", (s) => {
+            const flicker = (Math.sin(t * 2.1 + s.phase * 11) + 1) * 0.5;
+            return flicker > 0.73 ? 0.95 : 0;
+          });
+      }
+      
+      node.call(
+        d3.drag()
+          .on("start", (event) => {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            event.subject.fx = event.subject.x;
+            event.subject.fy = event.subject.y;
+          })
+          .on("drag", (event) => {
+            event.subject.fx = event.x;
+            event.subject.fy = event.y;
+          })
+          .on("end", (event) => {
+            if (!event.active) simulation.alphaTarget(0);
+            event.subject.fx = null;
+            event.subject.fy = null;
+          })
+      );
+      
+      simulation.on("tick", () => {
+        link
+          .attr("x1", (d) => d.source.x)
+          .attr("y1", (d) => d.source.y)
+          .attr("x2", (d) => d.target.x)
+          .attr("y2", (d) => d.target.y);
+        
+        node.attr("transform", (d) => `translate(${d.x},${d.y})`);
+      });
+      
+      sparkTimer = d3.timer(() => {
+        animateSparks(Date.now() / 1000);
+      });
+    }
+    
+    window.__updateGraph = function(nextGraph) {
+      graph = nextGraph;
+      render();
+    };
+    
+    window.__selectNode = function(id) {
+      selectedNodeId = id;
+      render();
+    };
+    
+    window.__resetView = function() {
+      if (svgRef && zoomRef) {
+        svgRef.transition().duration(360).call(zoomRef.transform, d3.zoomIdentity);
+      }
+      if (simulation) {
+        simulation.alpha(0.85).restart();
+      }
+    };
+    
+    if (window.d3) {
+      render();
+    } else {
+      const root = document.getElementById("root");
+      root.innerHTML = '<div style="color:#dbe7ff;opacity:0.9;padding:16px;font-size:13px;">Unable to load D3. Check network and reload the graph.</div>';
+    }
+  </script>
+</body>
+</html>

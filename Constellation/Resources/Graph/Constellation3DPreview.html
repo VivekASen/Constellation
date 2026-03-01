@@ -1,0 +1,343 @@
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+    #root { width: 100%; height: 100%; position: relative; }
+    #canvas { width: 100%; height: 100%; display: block; }
+    #hint {
+      position: absolute; left: 10px; bottom: 8px; padding: 6px 8px; border-radius: 10px;
+      color: rgba(235, 243, 255, 0.92); font: 11px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+      background: rgba(10, 20, 56, 0.4); pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <canvas id="canvas"></canvas>
+    <div id="hint">Drag to rotate · Tap a node to select · Double-tap to open</div>
+  </div>
+  <script>
+    let graph = __INITIAL_GRAPH_JSON__;
+    let selectedNodeId = null;
+    let spinX = -0.45;
+    let spinY = 0.32;
+    let velocityX = 0.0;
+    let velocityY = 0.0;
+    const baseAutoSpinY = 0.0008;
+    const idleResumeMs = 2600;
+    let autoSpin = true;
+    let lastInteractionAt = Date.now();
+    let dragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    let hoverNodeId = null;
+    let lastTap = { id: null, time: 0 };
+    let frontCaptionNodeIds = [];
+    
+    const root = document.getElementById("root");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    
+    function resize() {
+      const dpr = window.devicePixelRatio || 1;
+      const w = root.clientWidth || 320;
+      const h = root.clientHeight || 280;
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
+      canvas.style.width = w + "px";
+      canvas.style.height = h + "px";
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    
+    function hash01(str) {
+      let h = 2166136261;
+      for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return (h >>> 0) / 4294967295;
+    }
+    
+    function buildState() {
+      const nodes = graph.nodes.map((n) => {
+        const u = hash01(n.id + ":u");
+        const v = hash01(n.id + ":v");
+        const theta = u * Math.PI * 2;
+        const phi = Math.acos(2 * v - 1);
+        const r = 0.75 + hash01(n.id + ":r") * 0.38;
+        return {
+          ...n,
+          x: Math.sin(phi) * Math.cos(theta) * r,
+          y: Math.cos(phi) * r,
+          z: Math.sin(phi) * Math.sin(theta) * r
+        };
+      });
+      const nodeById = new Map(nodes.map((n) => [n.id, n]));
+      const links = graph.links
+        .map((l) => ({ ...l, a: nodeById.get(l.source), b: nodeById.get(l.target) }))
+        .filter((l) => l.a && l.b);
+      return { nodes, links };
+    }
+    
+    let state = buildState();
+    
+    function rotate(p, ax, ay) {
+      const cosY = Math.cos(ay), sinY = Math.sin(ay);
+      const cosX = Math.cos(ax), sinX = Math.sin(ax);
+      let x = p.x * cosY - p.z * sinY;
+      let z = p.x * sinY + p.z * cosY;
+      let y = p.y * cosX - z * sinX;
+      z = p.y * sinX + z * cosX;
+      return { x, y, z };
+    }
+    
+    function project(rot, w, h) {
+      const fov = Math.min(w, h) * 0.9;
+      const depth = rot.z + 2.3;
+      const s = fov / Math.max(0.2, depth);
+      return { px: w * 0.5 + rot.x * s, py: h * 0.5 + rot.y * s, scale: s, depth };
+    }
+    
+    function draw() {
+      const w = root.clientWidth || 320;
+      const h = root.clientHeight || 280;
+      ctx.clearRect(0, 0, w, h);
+      
+      const bg = ctx.createRadialGradient(w * 0.2, h * 0.1, 8, w * 0.5, h * 0.5, Math.max(w, h));
+      bg.addColorStop(0, "rgba(20, 32, 71, 0.94)");
+      bg.addColorStop(0.45, "rgba(10, 18, 51, 0.96)");
+      bg.addColorStop(1, "rgba(5, 12, 36, 0.98)");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, w, h);
+      
+      const projected = state.nodes.map((node) => {
+        const r = rotate(node, spinX, spinY);
+        const p = project(r, w, h);
+        return { node, ...p };
+      }).sort((a, b) => b.depth - a.depth);
+      
+      frontCaptionNodeIds.length = 0;
+      const frontCandidates = projected
+        .slice()
+        .sort((a, b) => a.depth - b.depth)
+        .slice(0, 8);
+      const minLabelDistance = 50;
+      for (const c of frontCandidates) {
+        if (frontCaptionNodeIds.length >= 5) break;
+        const tooClose = frontCaptionNodeIds.some((picked) => {
+          const dx = picked.px - c.px;
+          const dy = picked.py - c.py;
+          return Math.hypot(dx, dy) < minLabelDistance;
+        });
+        if (!tooClose) {
+          frontCaptionNodeIds.push(c);
+        }
+      }
+      
+      const pos = new Map(projected.map((p) => [p.node.id, p]));
+      
+      for (const link of state.links) {
+        const a = pos.get(link.source);
+        const b = pos.get(link.target);
+        if (!a || !b) continue;
+        const alpha = 0.16 + Math.max(0, 0.32 - Math.abs((a.depth + b.depth) * 0.08));
+        ctx.strokeStyle = `rgba(205, 220, 255, ${alpha})`;
+        ctx.lineWidth = Math.min(2.2, 0.5 + (link.weight || 1) * 0.45);
+        ctx.beginPath();
+        ctx.moveTo(a.px, a.py);
+        ctx.lineTo(b.px, b.py);
+        ctx.stroke();
+      }
+      
+      for (const p of projected) {
+        const isSelected = p.node.id === selectedNodeId;
+        const isHover = p.node.id === hoverNodeId;
+        const radius = (isSelected ? 7.8 : 6.2) * Math.min(1.55, Math.max(0.7, p.scale / 95));
+        
+        ctx.beginPath();
+        ctx.fillStyle = p.node.color;
+        ctx.globalAlpha = selectedNodeId && !isSelected ? 0.48 : 0.96;
+        ctx.arc(p.px, p.py, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+        
+        ctx.lineWidth = isSelected ? 2.2 : (isHover ? 1.6 : 1.0);
+        ctx.strokeStyle = isSelected ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.45)";
+        ctx.stroke();
+        
+        const isFrontCaption = !hoverNodeId && !selectedNodeId && autoSpin && frontCaptionNodeIds.some((n) => n.node.id === p.node.id);
+        if (isHover || isSelected || isFrontCaption) {
+          drawLabel(p.node.title, p.px + 11, p.py - 10, isFrontCaption ? 0.92 : 1.0);
+        }
+      }
+    }
+    
+    function drawLabel(text, x, y, alpha = 1.0) {
+      const a = Math.max(0.2, Math.min(1.0, alpha));
+      ctx.font = "12px -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif";
+      const w = Math.min(188, Math.max(52, ctx.measureText(text).width + 14));
+      const h = 24;
+      ctx.fillStyle = `rgba(18, 24, 48, ${0.86 * a})`;
+      roundRect(x, y - h, w, h, 10);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(210, 220, 255, ${0.4 * a})`;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = `rgba(245, 248, 255, ${0.97 * a})`;
+      ctx.fillText(text, x + 7, y - 8);
+    }
+
+    function markInteraction() {
+      lastInteractionAt = Date.now();
+      autoSpin = false;
+    }
+    
+    function roundRect(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath();
+    }
+    
+    function pickNode(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      let best = null;
+      let bestDist = 22;
+      const w = root.clientWidth || 320;
+      const h = root.clientHeight || 280;
+      
+      for (const node of state.nodes) {
+        const r = rotate(node, spinX, spinY);
+        const p = project(r, w, h);
+        const d = Math.hypot(p.px - x, p.py - y);
+        if (d < bestDist) {
+          bestDist = d;
+          best = node.id;
+        }
+      }
+      return best;
+    }
+    
+    function tick() {
+      if (!dragging && !autoSpin && (Date.now() - lastInteractionAt) > idleResumeMs) {
+        autoSpin = true;
+      }
+      if (!dragging) {
+        if (autoSpin) {
+          velocityY = velocityY * 0.92 + baseAutoSpinY * 0.08;
+          velocityX *= 0.95;
+        } else {
+          velocityY *= 0.965;
+        }
+        spinX += velocityX;
+        spinY += velocityY;
+        velocityX *= 0.985;
+      }
+      draw();
+      requestAnimationFrame(tick);
+    }
+    
+    canvas.addEventListener("mousedown", (e) => {
+      markInteraction();
+      dragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+    });
+    window.addEventListener("mouseup", () => { dragging = false; });
+    window.addEventListener("mousemove", (e) => {
+      if (dragging) {
+        markInteraction();
+        const dx = e.clientX - lastX;
+        const dy = e.clientY - lastY;
+        spinY += dx * 0.006;
+        spinX += dy * 0.006;
+        velocityY = dx * 0.00024;
+        velocityX = dy * 0.00024;
+        lastX = e.clientX;
+        lastY = e.clientY;
+      } else {
+        hoverNodeId = pickNode(e.clientX, e.clientY);
+      }
+    });
+    
+    canvas.addEventListener("touchstart", (e) => {
+      markInteraction();
+      const t = e.touches[0];
+      dragging = true;
+      lastX = t.clientX;
+      lastY = t.clientY;
+    }, { passive: true });
+    
+    canvas.addEventListener("touchmove", (e) => {
+      markInteraction();
+      const t = e.touches[0];
+      const dx = t.clientX - lastX;
+      const dy = t.clientY - lastY;
+      spinY += dx * 0.006;
+      spinX += dy * 0.006;
+      velocityY = dx * 0.00024;
+      velocityX = dy * 0.00024;
+      lastX = t.clientX;
+      lastY = t.clientY;
+      hoverNodeId = pickNode(t.clientX, t.clientY);
+    }, { passive: true });
+    
+    canvas.addEventListener("touchend", () => {
+      dragging = false;
+    }, { passive: true });
+    
+    canvas.addEventListener("click", (e) => {
+      markInteraction();
+      const id = pickNode(e.clientX, e.clientY);
+      if (!id) return;
+      selectedNodeId = id;
+      if (window.webkit?.messageHandlers?.nodeTap) {
+        window.webkit.messageHandlers.nodeTap.postMessage(id);
+      }
+      const now = Date.now();
+      if (lastTap.id === id && (now - lastTap.time) < 320) {
+        if (window.webkit?.messageHandlers?.nodeOpen) {
+          window.webkit.messageHandlers.nodeOpen.postMessage(id);
+        }
+      }
+      lastTap = { id, time: now };
+    });
+    
+    window.__updateGraph = function(nextGraph) {
+      graph = nextGraph;
+      state = buildState();
+    };
+    
+    window.__selectNode = function(id) {
+      selectedNodeId = id;
+    };
+    
+    window.__resetView = function() {
+      spinX = -0.45;
+      spinY = 0.32;
+      velocityX = 0.0;
+      velocityY = 0.0;
+      hoverNodeId = null;
+      frontCaptionNodeIds.length = 0;
+      selectedNodeId = null;
+      autoSpin = true;
+      lastInteractionAt = Date.now();
+    };
+    
+    window.addEventListener("resize", resize);
+    resize();
+    tick();
+  </script>
+</body>
+</html>
