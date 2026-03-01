@@ -9,6 +9,10 @@ final class RecommendationEngineV2 {
     private let minimumTVVoteCount = 120
     private let documentaryGenreID = 99
     private let vectorRetriever = LibraryVectorRetriever.shared
+    private let maxCandidateQueries = 10
+    private let perQueryTake = 5
+    private let targetCandidatePool = 26
+    private let popularFallbackThreshold = 10
     
     private let seedCatalog: [String: [String]] = [
         "space": ["Interstellar", "The Martian", "Apollo 13", "Gravity", "The Expanse", "For All Mankind", "Contact"],
@@ -53,17 +57,18 @@ final class RecommendationEngineV2 {
         )
         let candidateQueries = buildCandidateQueries(query: query, understanding: understanding)
         
-        let movieCandidates = await fetchMovieCandidates(queries: candidateQueries)
-        let tvCandidates = await fetchTVCandidates(queries: candidateQueries)
+        async let movieCandidates = fetchMovieCandidates(queries: candidateQueries)
+        async let tvCandidates = fetchTVCandidates(queries: candidateQueries)
+        let (movieCandidatesResolved, tvCandidatesResolved) = await (movieCandidates, tvCandidates)
         
         let movieLibraryIDs = Set(userMovies.compactMap(\.tmdbID))
         let tvLibraryIDs = Set(userTVShows.compactMap(\.tmdbID))
         
-        let filteredMovies = dedupeMovies(movieCandidates)
+        let filteredMovies = dedupeMovies(movieCandidatesResolved)
             .filter { !movieLibraryIDs.contains($0.id) }
             .filter { ($0.voteCount ?? 0) >= minimumMovieVoteCount || ($0.voteAverage ?? 0) >= 7.9 }
             .filter { satisfiesMovieIntent($0, intent: intent) }
-        let filteredTVShows = dedupeTVShows(tvCandidates)
+        let filteredTVShows = dedupeTVShows(tvCandidatesResolved)
             .filter { !tvLibraryIDs.contains($0.id) }
             .filter { ($0.voteCount ?? 0) >= minimumTVVoteCount || ($0.voteAverage ?? 0) >= 8.0 }
             .filter { satisfiesTVIntent($0, intent: intent) }
@@ -123,7 +128,7 @@ final class RecommendationEngineV2 {
         }
         
         let deduped = Array(NSOrderedSet(array: candidates.compactMap(cleanSuggestion))) as? [String] ?? []
-        return Array(deduped.prefix(14))
+        return Array(deduped.prefix(maxCandidateQueries))
     }
     
     private func fetchMovieCandidates(queries: [String]) async -> [TMDBMovie] {
@@ -136,11 +141,15 @@ final class RecommendationEngineV2 {
             
             var results: [TMDBMovie] = []
             for await chunk in group {
-                results.append(contentsOf: chunk.prefix(5))
+                results.append(contentsOf: chunk.prefix(perQueryTake))
+                if results.count >= targetCandidatePool {
+                    group.cancelAll()
+                    break
+                }
             }
             
-            if results.count < 12, let popular = try? await TMDBService.shared.getPopularMovies() {
-                results.append(contentsOf: popular.prefix(15))
+            if results.count < popularFallbackThreshold, let popular = try? await TMDBService.shared.getPopularMovies() {
+                results.append(contentsOf: popular.prefix(12))
             }
             
             return results
@@ -157,11 +166,15 @@ final class RecommendationEngineV2 {
             
             var results: [TMDBTVShow] = []
             for await chunk in group {
-                results.append(contentsOf: chunk.prefix(5))
+                results.append(contentsOf: chunk.prefix(perQueryTake))
+                if results.count >= targetCandidatePool {
+                    group.cancelAll()
+                    break
+                }
             }
             
-            if results.count < 12, let popular = try? await TMDBService.shared.getPopularTVShows() {
-                results.append(contentsOf: popular.prefix(15))
+            if results.count < popularFallbackThreshold, let popular = try? await TMDBService.shared.getPopularTVShows() {
+                results.append(contentsOf: popular.prefix(12))
             }
             
             return results

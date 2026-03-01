@@ -13,6 +13,10 @@ class TMDBService {
     
     private let apiKey = "REDACTED_TMDB_KEY"
     private let baseURL = "https://api.themoviedb.org/3"
+    private let cache = TMDBDataCache()
+    private let searchTTL: TimeInterval = 60 * 12
+    private let popularTTL: TimeInterval = 60 * 10
+    private let detailTTL: TimeInterval = 60 * 60 * 6
     
     private init() {}
     
@@ -21,20 +25,20 @@ class TMDBService {
     func searchMovies(query: String) async throws -> [TMDBMovie] {
         let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         let urlString = "\(baseURL)/search/movie?api_key=\(apiKey)&query=\(encodedQuery)"
-        let data = try await fetchData(urlString: urlString)
+        let data = try await fetchData(urlString: urlString, ttl: searchTTL)
         let response = try JSONDecoder().decode(TMDBSearchResponse.self, from: data)
         return response.results
     }
     
     func getMovieDetails(id: Int) async throws -> TMDBMovieDetail {
         let urlString = "\(baseURL)/movie/\(id)?api_key=\(apiKey)&append_to_response=credits"
-        let data = try await fetchData(urlString: urlString)
+        let data = try await fetchData(urlString: urlString, ttl: detailTTL)
         return try JSONDecoder().decode(TMDBMovieDetail.self, from: data)
     }
     
     func getPopularMovies() async throws -> [TMDBMovie] {
         let urlString = "\(baseURL)/movie/popular?api_key=\(apiKey)"
-        let data = try await fetchData(urlString: urlString)
+        let data = try await fetchData(urlString: urlString, ttl: popularTTL)
         let response = try JSONDecoder().decode(TMDBSearchResponse.self, from: data)
         return response.results
     }
@@ -44,27 +48,31 @@ class TMDBService {
     func searchTVShows(query: String) async throws -> [TMDBTVShow] {
         let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         let urlString = "\(baseURL)/search/tv?api_key=\(apiKey)&query=\(encodedQuery)"
-        let data = try await fetchData(urlString: urlString)
+        let data = try await fetchData(urlString: urlString, ttl: searchTTL)
         let response = try JSONDecoder().decode(TMDBTVSearchResponse.self, from: data)
         return response.results
     }
     
     func getTVShowDetails(id: Int) async throws -> TMDBTVShowDetail {
         let urlString = "\(baseURL)/tv/\(id)?api_key=\(apiKey)"
-        let data = try await fetchData(urlString: urlString)
+        let data = try await fetchData(urlString: urlString, ttl: detailTTL)
         return try JSONDecoder().decode(TMDBTVShowDetail.self, from: data)
     }
     
     func getPopularTVShows() async throws -> [TMDBTVShow] {
         let urlString = "\(baseURL)/tv/popular?api_key=\(apiKey)"
-        let data = try await fetchData(urlString: urlString)
+        let data = try await fetchData(urlString: urlString, ttl: popularTTL)
         let response = try JSONDecoder().decode(TMDBTVSearchResponse.self, from: data)
         return response.results
     }
     
     // MARK: - Shared Request Helper
     
-    private func fetchData(urlString: String) async throws -> Data {
+    private func fetchData(urlString: String, ttl: TimeInterval) async throws -> Data {
+        if let cached = await cache.data(for: urlString) {
+            return cached
+        }
+
         guard let url = URL(string: urlString) else {
             throw TMDBError.invalidURL
         }
@@ -75,7 +83,30 @@ class TMDBService {
             throw TMDBError.networkError
         }
         
+        await cache.store(data, for: urlString, ttl: ttl)
         return data
+    }
+}
+
+private actor TMDBDataCache {
+    private struct Entry {
+        let data: Data
+        let expiresAt: Date
+    }
+
+    private var store: [String: Entry] = [:]
+
+    func data(for key: String) -> Data? {
+        guard let entry = store[key] else { return nil }
+        if entry.expiresAt < Date() {
+            store[key] = nil
+            return nil
+        }
+        return entry.data
+    }
+
+    func store(_ data: Data, for key: String, ttl: TimeInterval) {
+        store[key] = Entry(data: data, expiresAt: Date().addingTimeInterval(ttl))
     }
 }
 
@@ -93,6 +124,7 @@ struct TMDBMovie: Codable, Identifiable {
     let releaseDate: String?
     let voteAverage: Double?
     let voteCount: Int?
+    let genreIDs: [Int]?
     
     enum CodingKeys: String, CodingKey {
         case id, title, overview
@@ -100,6 +132,7 @@ struct TMDBMovie: Codable, Identifiable {
         case releaseDate = "release_date"
         case voteAverage = "vote_average"
         case voteCount = "vote_count"
+        case genreIDs = "genre_ids"
     }
     
     var posterURL: URL? {
@@ -160,6 +193,7 @@ struct TMDBTVShow: Codable, Identifiable {
     let firstAirDate: String?
     let voteAverage: Double?
     let voteCount: Int?
+    let genreIDs: [Int]?
     
     enum CodingKeys: String, CodingKey {
         case id, name, overview
@@ -167,6 +201,7 @@ struct TMDBTVShow: Codable, Identifiable {
         case firstAirDate = "first_air_date"
         case voteAverage = "vote_average"
         case voteCount = "vote_count"
+        case genreIDs = "genre_ids"
     }
     
     var title: String { name }
