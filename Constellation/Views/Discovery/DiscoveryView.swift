@@ -43,7 +43,7 @@ struct DiscoveryView: View {
                             }
 
                             ForEach(turns) { turn in
-                                let display = displayPreference(for: turn.userText)
+                                let display = turn.displayPreference
                                 userBubble(turn.userText)
 
                                 if let summary = turn.assistantSummary {
@@ -241,9 +241,15 @@ struct DiscoveryView: View {
         guard !message.isEmpty else { return }
         draftQuery = ""
 
-        updateConversationState(with: message)
+        let plan = planTurn(for: message)
+        applyPlan(plan)
 
-        var turn = DiscoveryChatTurn(userText: message, assistantSummary: nil, result: nil)
+        var turn = DiscoveryChatTurn(
+            userText: message,
+            assistantSummary: nil,
+            result: nil,
+            displayPreference: plan.displayPreference
+        )
         turns.append(turn)
 
         isSearching = true
@@ -255,7 +261,7 @@ struct DiscoveryView: View {
             userTVShows: tvShows
         )
 
-        turn.assistantSummary = assistantSummary(for: message)
+        turn.assistantSummary = assistantSummary(for: plan)
         turn.result = discovery
 
         if let lastIndex = turns.indices.last {
@@ -263,99 +269,6 @@ struct DiscoveryView: View {
         }
 
         isSearching = false
-    }
-
-    private func updateConversationState(with message: String) {
-        let normalized = normalizedIntentText(message)
-        let appliedConstraint = applyConstraints(from: normalized)
-
-        if conversationState.topic == nil {
-            conversationState.topic = message
-            return
-        }
-
-        // Keep the original topic when the user sends a short refinement like
-        // "actually documentaries" or "movie only".
-        if !appliedConstraint || shouldTreatAsNewTopic(normalized) {
-            conversationState.topic = message
-        }
-    }
-
-    @discardableResult
-    private func applyConstraints(from normalized: String) -> Bool {
-        var applied = false
-
-        if containsAny(normalized, terms: ["documentary", "documentaries", "docuseries"]) {
-            conversationState.documentaryOnly = true
-            conversationState.fictionPreference = "Non-Fiction"
-            applied = true
-        }
-
-        if containsAny(normalized, terms: ["non fiction", "non-fiction", "nonfiction"]) {
-            conversationState.fictionPreference = "Non-Fiction"
-            conversationState.documentaryOnly = true
-            applied = true
-        }
-
-        if normalized.contains("fiction")
-            && !containsAny(normalized, terms: ["non fiction", "non-fiction", "nonfiction"]) {
-            conversationState.fictionPreference = "Fiction"
-            conversationState.documentaryOnly = false
-            applied = true
-        }
-
-        if containsAny(normalized, terms: ["movie only", "movies only", "film only", "films only"]) {
-            conversationState.mediaMode = .movieOnly
-            applied = true
-        } else if containsAny(normalized, terms: [
-            "tv only",
-            "show only",
-            "shows only",
-            "series only",
-            "tv shows only",
-            "tv suggestion",
-            "tv suggestions",
-            "show suggestions",
-            "more tv",
-            "more shows"
-        ]) {
-            conversationState.mediaMode = .tvOnly
-            applied = true
-        } else if containsAny(normalized, terms: [
-            "movie suggestion",
-            "movie suggestions",
-            "film suggestions",
-            "more movies",
-            "more films"
-        ]) {
-            conversationState.mediaMode = .movieOnly
-            applied = true
-        } else if containsAny(normalized, terms: ["both", "either", "any format"]) {
-            conversationState.mediaMode = .any
-            applied = true
-        }
-
-        return applied
-    }
-
-    private func shouldTreatAsNewTopic(_ normalized: String) -> Bool {
-        if containsAny(normalized, terms: ["actually", "instead", "now", "make it", "i want"]) {
-            return false
-        }
-
-        let filler = Set([
-            "i", "want", "something", "more", "less", "actually", "instead", "now",
-            "please", "show", "me", "about", "with", "and", "or", "the", "a", "an",
-            "only", "both", "either", "format", "movie", "movies", "tv", "show", "shows",
-            "series", "documentary", "documentaries", "docuseries", "fiction", "non", "nonfiction"
-        ])
-
-        let topicalTokens = normalized
-            .split(separator: " ")
-            .map(String.init)
-            .filter { !$0.isEmpty && !filler.contains($0) }
-
-        return topicalTokens.count >= 2
     }
 
     private func normalizedIntentText(_ text: String) -> String {
@@ -370,58 +283,183 @@ struct DiscoveryView: View {
         terms.contains { text.contains($0) }
     }
 
-    private func displayPreference(for message: String) -> TurnDisplayPreference {
+    private func planTurn(for message: String) -> DiscoveryTurnPlan {
         let normalized = normalizedIntentText(message)
-        let isMore = containsAny(normalized, terms: [
-            "more",
-            "another",
-            "anything else",
-            "similar",
-            "keep going",
-            "next suggestion",
-            "next suggestions"
+        let wantsMore = containsAny(normalized, terms: [
+            "more", "another", "anything else", "similar", "keep going", "next", "additional"
         ])
+        let resetRequested = containsAny(normalized, terms: ["reset", "start over", "new chat", "clear chat"])
+
         let wantsTV = containsAny(normalized, terms: ["tv", "show", "shows", "series"])
         let wantsMovies = containsAny(normalized, terms: ["movie", "movies", "film", "films"])
 
+        let mediaOverride: DiscoveryConversationState.MediaMode?
         if wantsTV && !wantsMovies {
-            return TurnDisplayPreference(movieLimit: 0, tvLimit: isMore ? 3 : 2)
+            mediaOverride = .tvOnly
+        } else if wantsMovies && !wantsTV {
+            mediaOverride = .movieOnly
+        } else if containsAny(normalized, terms: ["both", "either", "any format", "anything"]) {
+            mediaOverride = .any
+        } else {
+            mediaOverride = nil
         }
-        if wantsMovies && !wantsTV {
-            return TurnDisplayPreference(movieLimit: isMore ? 3 : 2, tvLimit: 0)
+
+        let documentaryOnly: Bool?
+        let fictionPreference: String?
+        if containsAny(normalized, terms: ["documentary", "documentaries", "docuseries", "non fiction", "non-fiction", "nonfiction"]) {
+            documentaryOnly = true
+            fictionPreference = "Non-Fiction"
+        } else if normalized.contains("fiction") {
+            documentaryOnly = false
+            fictionPreference = "Fiction"
+        } else {
+            documentaryOnly = nil
+            fictionPreference = nil
         }
-        if isMore {
-            return TurnDisplayPreference(movieLimit: 2, tvLimit: 2)
+
+        let metaOnly = isMetaOnlyMessage(normalized)
+        let explicitNewTopic = containsAny(normalized, terms: [
+            "switch to", "new topic", "let s talk about", "lets talk about", "what about", "how about"
+        ])
+        let standaloneTopic = isLikelyStandaloneTopic(normalized)
+
+        let topicAction: DiscoveryTurnPlan.TopicAction
+        let topicText: String?
+        let refinementText: String?
+        if resetRequested {
+            topicAction = .keep
+            topicText = nil
+            refinementText = nil
+        } else if conversationState.topic == nil || explicitNewTopic || (standaloneTopic && !wantsMore) {
+            topicAction = .startNew
+            topicText = extractTopicText(from: message)
+            refinementText = nil
+        } else if metaOnly {
+            topicAction = .keep
+            topicText = nil
+            refinementText = nil
+        } else {
+            topicAction = .refine
+            topicText = nil
+            refinementText = extractTopicText(from: message)
         }
-        return TurnDisplayPreference(movieLimit: 1, tvLimit: 1)
+
+        let effectiveMode = mediaOverride ?? conversationState.mediaMode
+        let display: TurnDisplayPreference
+        switch effectiveMode {
+        case .movieOnly:
+            display = TurnDisplayPreference(movieLimit: wantsMore ? 4 : 2, tvLimit: 0)
+        case .tvOnly:
+            display = TurnDisplayPreference(movieLimit: 0, tvLimit: wantsMore ? 4 : 2)
+        case .any:
+            display = wantsMore
+                ? TurnDisplayPreference(movieLimit: 2, tvLimit: 2)
+                : TurnDisplayPreference(movieLimit: 1, tvLimit: 1)
+        }
+
+        return DiscoveryTurnPlan(
+            resetRequested: resetRequested,
+            topicAction: topicAction,
+            topicText: topicText,
+            refinementText: refinementText,
+            mediaModeOverride: mediaOverride,
+            documentaryOnlyOverride: documentaryOnly,
+            fictionPreferenceOverride: fictionPreference,
+            wantsMore: wantsMore,
+            displayPreference: display
+        )
     }
 
-    private func assistantSummary(for message: String) -> String {
-        let normalized = normalizedIntentText(message)
-        let wantsMore = containsAny(normalized, terms: ["more", "another", "anything else", "similar", "keep going"])
+    private func applyPlan(_ plan: DiscoveryTurnPlan) {
+        if plan.resetRequested {
+            conversationState = DiscoveryConversationState()
+            return
+        }
 
-        switch conversationState.mediaMode {
-        case .tvOnly:
-            return wantsMore
-                ? "Great, here are more TV suggestions in the same lane."
-                : "Got it, I’ll focus on TV suggestions."
-        case .movieOnly:
-            return wantsMore
-                ? "Great, here are more movie suggestions in the same lane."
-                : "Got it, I’ll focus on movie suggestions."
-        case .any:
+        if let mode = plan.mediaModeOverride {
+            conversationState.mediaMode = mode
+        }
+        if let documentaryOnly = plan.documentaryOnlyOverride {
+            conversationState.documentaryOnly = documentaryOnly
+        }
+        if let fictionPref = plan.fictionPreferenceOverride {
+            conversationState.fictionPreference = fictionPref
+        }
+
+        switch plan.topicAction {
+        case .startNew:
+            conversationState.topic = plan.topicText
+            conversationState.refinements.removeAll()
+        case .refine:
+            if let refinement = plan.refinementText, !refinement.isEmpty {
+                conversationState.refinements.append(refinement)
+                if conversationState.refinements.count > 4 {
+                    conversationState.refinements = Array(conversationState.refinements.suffix(4))
+                }
+            }
+        case .keep:
             break
+        }
+    }
+
+    private func assistantSummary(for plan: DiscoveryTurnPlan) -> String {
+        if plan.resetRequested {
+            return "Reset complete. Tell me what you want next."
+        }
+
+        if plan.wantsMore {
+            switch conversationState.mediaMode {
+            case .movieOnly: return "Great, here are more movie picks."
+            case .tvOnly: return "Great, here are more TV picks."
+            case .any: return "Great, here are a few more strong picks."
+            }
         }
 
         if conversationState.documentaryOnly {
-            return wantsMore
-                ? "Great, here are more documentary picks."
-                : "Got it, I’ll keep this strictly documentary."
+            return "Got it. I’ll keep this strictly documentary."
         }
 
-        return wantsMore
-            ? "Great, here are a few more strong picks."
-            : "Got it. Here are the best matches I found."
+        switch plan.topicAction {
+        case .startNew:
+            if let topic = conversationState.topic, !topic.isEmpty {
+                return "Got it. I’m now focusing on \(topic)."
+            }
+            return "Got it. I’m ready for your topic."
+        case .refine:
+            if let refinement = plan.refinementText, !refinement.isEmpty {
+                return "Perfect. I refined the picks based on “\(refinement)”."
+            }
+            return "Perfect. I refined the picks."
+        case .keep:
+            switch conversationState.mediaMode {
+            case .movieOnly: return "Got it, I’ll focus on movies."
+            case .tvOnly: return "Got it, I’ll focus on TV."
+            case .any: return "Got it. Here are the best matches."
+            }
+        }
+    }
+
+    private func extractTopicText(from message: String) -> String {
+        message.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func isMetaOnlyMessage(_ normalized: String) -> Bool {
+        let metaTokens: Set<String> = [
+            "more", "another", "anything", "else", "similar", "keep", "going",
+            "suggestion", "suggestions", "tv", "show", "shows", "series",
+            "movie", "movies", "film", "films", "please", "some", "give", "me", "can", "you"
+        ]
+        let tokens = normalized.split(separator: " ").map(String.init)
+        guard !tokens.isEmpty else { return true }
+        return tokens.allSatisfy { metaTokens.contains($0) }
+    }
+
+    private func isLikelyStandaloneTopic(_ normalized: String) -> Bool {
+        if containsAny(normalized, terms: ["more", "another", "similar", "like this", "keep going"]) {
+            return false
+        }
+        let tokens = normalized.split(separator: " ")
+        return !tokens.isEmpty && tokens.count <= 6
     }
 
     private func isMovieInLibrary(_ tmdbID: Int) -> Bool {
@@ -617,11 +655,30 @@ private struct DiscoveryChatTurn: Identifiable {
     let userText: String
     var assistantSummary: String?
     var result: DiscoveryResult?
+    var displayPreference: TurnDisplayPreference = TurnDisplayPreference(movieLimit: 1, tvLimit: 1)
 }
 
 private struct TurnDisplayPreference {
     let movieLimit: Int
     let tvLimit: Int
+}
+
+private struct DiscoveryTurnPlan {
+    enum TopicAction {
+        case startNew
+        case refine
+        case keep
+    }
+
+    let resetRequested: Bool
+    let topicAction: TopicAction
+    let topicText: String?
+    let refinementText: String?
+    let mediaModeOverride: DiscoveryConversationState.MediaMode?
+    let documentaryOnlyOverride: Bool?
+    let fictionPreferenceOverride: String?
+    let wantsMore: Bool
+    let displayPreference: TurnDisplayPreference
 }
 
 private struct DiscoveryConversationState {
@@ -632,6 +689,7 @@ private struct DiscoveryConversationState {
     }
 
     var topic: String? = nil
+    var refinements: [String] = []
     var documentaryOnly = false
     var fictionPreference: String? = nil
     var mediaMode: MediaMode = .any
@@ -640,6 +698,10 @@ private struct DiscoveryConversationState {
         var parts: [String] = []
         if let topic, !topic.isEmpty {
             parts.append(topic)
+        }
+
+        if !refinements.isEmpty {
+            parts.append(contentsOf: refinements.map { "refine: \($0)" })
         }
 
         if documentaryOnly {
@@ -660,23 +722,6 @@ private struct DiscoveryConversationState {
         }
 
         return parts.joined(separator: " | ")
-    }
-
-    var summaryLine: String {
-        var tags: [String] = []
-        if let topic, !topic.isEmpty { tags.append("Topic: \(topic)") }
-        if documentaryOnly { tags.append("Documentary mode") }
-        if let fictionPreference { tags.append(fictionPreference) }
-        switch mediaMode {
-        case .movieOnly: tags.append("Movies only")
-        case .tvOnly: tags.append("TV only")
-        case .any: break
-        }
-
-        if tags.isEmpty {
-            return "Understood. Here are my top picks."
-        }
-        return "Understood. Applied: \(tags.joined(separator: ", "))."
     }
 }
 
