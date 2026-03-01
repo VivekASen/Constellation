@@ -6,16 +6,16 @@ struct DiscoveryView: View {
     @Query private var tvShows: [TVShow]
 
     @State private var draftQuery = ""
-    @State private var submittedQuery: String?
     @State private var isSearching = false
-    @State private var result: DiscoveryResult?
+    @State private var turns: [DiscoveryChatTurn] = []
+    @State private var conversationState = DiscoveryConversationState()
     @State private var showingAddMovie: TMDBMovie?
 
     private let starterPrompts = [
         "space exploration",
-        "thoughtful sci fi",
-        "grounded non-fiction history",
-        "murder mystery"
+        "murder mystery",
+        "historical non-fiction",
+        "thoughtful sci fi"
     ]
 
     var body: some View {
@@ -32,29 +32,75 @@ struct DiscoveryView: View {
                 )
                 .ignoresSafeArea()
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        assistantBubble("Tell me what you want to watch, read, or listen to. I will return one strong movie pick and one strong TV pick.")
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 14) {
+                            assistantBubble("Tell me a topic and I will keep refining with you. I will return one strong movie pick and one strong TV pick each turn.")
 
-                        if submittedQuery == nil {
-                            promptSuggestions
+                            if turns.isEmpty {
+                                starterPromptSection
+                            }
+
+                            ForEach(turns) { turn in
+                                userBubble(turn.userText)
+
+                                if let summary = turn.assistantSummary {
+                                    assistantBubble(summary)
+                                }
+
+                                if let movie = turn.result?.recommendations.first {
+                                    mediaBubble(
+                                        title: movie.title,
+                                        subtitle: mediaSubtitle(year: movie.year, rating: movie.voteAverage),
+                                        reason: turn.result?.movieRecommendationReasons[movie.id] ?? "Strong fit for your request",
+                                        posterURL: movie.posterURL,
+                                        emoji: "🎬",
+                                        actionTitle: "Add Movie",
+                                        action: { showingAddMovie = movie }
+                                    )
+                                }
+
+                                if let show = turn.result?.tvRecommendations.first {
+                                    mediaBubble(
+                                        title: show.title,
+                                        subtitle: mediaSubtitle(year: show.year, rating: show.voteAverage),
+                                        reason: turn.result?.tvRecommendationReasons[show.id] ?? "Strong fit for your request",
+                                        posterURL: show.posterURL,
+                                        emoji: "📺",
+                                        actionTitle: nil,
+                                        action: nil
+                                    )
+                                }
+
+                                if let result = turn.result,
+                                   result.recommendations.isEmpty,
+                                   result.tvRecommendations.isEmpty {
+                                    assistantBubble("I could not find confident picks for that yet. Add one more concrete cue (topic, format, or fiction/non-fiction).")
+                                }
+                            }
+
+                            if isSearching {
+                                assistantBubble("Updating recommendations with your latest message...")
+                            }
+
+                            Color.clear
+                                .frame(height: 1)
+                                .id("chat-bottom")
                         }
-
-                        if let submittedQuery {
-                            userBubble(submittedQuery)
-                        }
-
-                        if isSearching {
-                            assistantBubble("Searching across your themes and ranking high-confidence picks...")
-                        }
-
-                        if let result, !isSearching {
-                            discoveryResponse(result)
+                        .padding(.horizontal, 14)
+                        .padding(.top, 14)
+                        .padding(.bottom, 100)
+                    }
+                    .onChange(of: turns.count) { _, _ in
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            proxy.scrollTo("chat-bottom", anchor: .bottom)
                         }
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.top, 14)
-                    .padding(.bottom, 100)
+                    .onChange(of: isSearching) { _, _ in
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            proxy.scrollTo("chat-bottom", anchor: .bottom)
+                        }
+                    }
                 }
 
                 VStack {
@@ -72,18 +118,18 @@ struct DiscoveryView: View {
 
     private var composer: some View {
         HStack(spacing: 10) {
-            TextField("Try: non-fiction space documentaries", text: $draftQuery)
+            TextField("Type your next message...", text: $draftQuery)
                 .textFieldStyle(.plain)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .background(Color.white.opacity(0.92))
                 .clipShape(RoundedRectangle(cornerRadius: 14))
                 .onSubmit {
-                    Task { await submitDraft() }
+                    Task { await submitMessage(draftQuery) }
                 }
 
             Button {
-                Task { await submitDraft() }
+                Task { await submitMessage(draftQuery) }
             } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 30))
@@ -96,7 +142,7 @@ struct DiscoveryView: View {
         .background(.ultraThinMaterial)
     }
 
-    private var promptSuggestions: some View {
+    private var starterPromptSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Starter prompts")
                 .font(.caption.weight(.semibold))
@@ -106,8 +152,7 @@ struct DiscoveryView: View {
                 HStack(spacing: 8) {
                     ForEach(starterPrompts, id: \.self) { prompt in
                         Button(prompt) {
-                            draftQuery = prompt
-                            Task { await submitDraft() }
+                            Task { await submitMessage(prompt) }
                         }
                         .font(.caption)
                         .padding(.horizontal, 10)
@@ -124,42 +169,155 @@ struct DiscoveryView: View {
         .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 
+    private func submitMessage(_ rawMessage: String) async {
+        let message = rawMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return }
+        draftQuery = ""
+
+        updateConversationState(with: message)
+
+        var turn = DiscoveryChatTurn(userText: message, assistantSummary: nil, result: nil)
+        turns.append(turn)
+
+        isSearching = true
+
+        let effectiveQuery = conversationState.effectiveQuery
+        let discovery = await DiscoveryEngine.shared.discover(
+            interest: effectiveQuery,
+            userMovies: movies,
+            userTVShows: tvShows
+        )
+
+        turn.assistantSummary = conversationState.summaryLine
+        turn.result = discovery
+
+        if let lastIndex = turns.indices.last {
+            turns[lastIndex] = turn
+        }
+
+        isSearching = false
+    }
+
+    private func updateConversationState(with message: String) {
+        let normalized = normalizedIntentText(message)
+
+        if containsAny(normalized, terms: ["reset", "start over", "new topic"]) {
+            conversationState = DiscoveryConversationState(topic: nil)
+            return
+        }
+
+        let appliedConstraint = applyConstraints(from: normalized)
+
+        if conversationState.topic == nil {
+            conversationState.topic = message
+            return
+        }
+
+        // Keep the original topic when the user sends a short refinement like
+        // "actually documentaries" or "movie only".
+        if !appliedConstraint || shouldTreatAsNewTopic(normalized) {
+            conversationState.topic = message
+        }
+    }
+
+    @discardableResult
+    private func applyConstraints(from normalized: String) -> Bool {
+        var applied = false
+
+        if containsAny(normalized, terms: ["documentary", "documentaries", "docuseries"]) {
+            conversationState.documentaryOnly = true
+            conversationState.fictionPreference = "Non-Fiction"
+            applied = true
+        }
+
+        if containsAny(normalized, terms: ["non fiction", "non-fiction", "nonfiction"]) {
+            conversationState.fictionPreference = "Non-Fiction"
+            conversationState.documentaryOnly = true
+            applied = true
+        }
+
+        if normalized.contains("fiction")
+            && !containsAny(normalized, terms: ["non fiction", "non-fiction", "nonfiction"]) {
+            conversationState.fictionPreference = "Fiction"
+            conversationState.documentaryOnly = false
+            applied = true
+        }
+
+        if containsAny(normalized, terms: ["movie only", "movies only", "film only", "films only"]) {
+            conversationState.mediaMode = .movieOnly
+            applied = true
+        } else if containsAny(normalized, terms: ["tv only", "show only", "shows only", "series only", "tv shows only"]) {
+            conversationState.mediaMode = .tvOnly
+            applied = true
+        } else if containsAny(normalized, terms: ["both", "either", "any format"]) {
+            conversationState.mediaMode = .any
+            applied = true
+        }
+
+        return applied
+    }
+
+    private func shouldTreatAsNewTopic(_ normalized: String) -> Bool {
+        if containsAny(normalized, terms: ["actually", "instead", "now", "make it", "i want"]) {
+            return false
+        }
+
+        let filler = Set([
+            "i", "want", "something", "more", "less", "actually", "instead", "now",
+            "please", "show", "me", "about", "with", "and", "or", "the", "a", "an",
+            "only", "both", "either", "format", "movie", "movies", "tv", "show", "shows",
+            "series", "documentary", "documentaries", "docuseries", "fiction", "non", "nonfiction"
+        ])
+
+        let topicalTokens = normalized
+            .split(separator: " ")
+            .map(String.init)
+            .filter { !$0.isEmpty && !filler.contains($0) }
+
+        return topicalTokens.count >= 2
+    }
+
+    private func normalizedIntentText(_ text: String) -> String {
+        text.lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: #"[^\p{L}\p{N}\s]"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func containsAny(_ text: String, terms: [String]) -> Bool {
+        terms.contains { text.contains($0) }
+    }
+
+    private func mediaSubtitle(year: Int?, rating: Double?) -> String {
+        let yearText = year.map(String.init) ?? "Year unknown"
+        let ratingText = rating.map { String(format: "%.1f", $0) } ?? "-"
+        return "\(yearText) • Rating \(ratingText)"
+    }
+
     @ViewBuilder
-    private func discoveryResponse(_ result: DiscoveryResult) -> some View {
-        let topicSummary = !result.understanding.mood.isEmpty
-            ? result.understanding.mood
-            : result.understanding.themes.joined(separator: ", ")
-
-        if !topicSummary.isEmpty {
-            assistantBubble("Got it. I optimized for: \(topicSummary).")
+    private func assistantBubble(_ text: String) -> some View {
+        HStack {
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(.white)
+                .padding(12)
+                .background(Color.white.opacity(0.16))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+            Spacer(minLength: 24)
         }
+    }
 
-        if let movie = result.recommendations.first {
-            mediaBubble(
-                title: movie.title,
-                subtitle: mediaSubtitle(year: movie.year, rating: movie.voteAverage),
-                reason: result.movieRecommendationReasons[movie.id] ?? "Strong fit for your query",
-                posterURL: movie.posterURL,
-                emoji: "🎬",
-                actionTitle: "Add Movie",
-                action: { showingAddMovie = movie }
-            )
-        } else {
-            assistantBubble("I could not find a confident movie pick yet. Try adding one extra keyword.")
-        }
-
-        if let show = result.tvRecommendations.first {
-            mediaBubble(
-                title: show.title,
-                subtitle: mediaSubtitle(year: show.year, rating: show.voteAverage),
-                reason: result.tvRecommendationReasons[show.id] ?? "Strong fit for your query",
-                posterURL: show.posterURL,
-                emoji: "📺",
-                actionTitle: nil,
-                action: nil
-            )
-        } else {
-            assistantBubble("I could not find a confident TV pick yet. Try clarifying genre or vibe.")
+    @ViewBuilder
+    private func userBubble(_ text: String) -> some View {
+        HStack {
+            Spacer(minLength: 24)
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(Color(red: 0.03, green: 0.20, blue: 0.46))
+                .padding(12)
+                .background(Color.white.opacity(0.95))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
         }
     }
 
@@ -223,55 +381,68 @@ struct DiscoveryView: View {
         .background(Color.white.opacity(0.13))
         .clipShape(RoundedRectangle(cornerRadius: 14))
     }
+}
 
-    private func mediaSubtitle(year: Int?, rating: Double?) -> String {
-        let yearText = year.map(String.init) ?? "Year unknown"
-        let ratingText = rating.map { String(format: "%.1f", $0) } ?? "-"
-        return "\(yearText) • Rating \(ratingText)"
+private struct DiscoveryChatTurn: Identifiable {
+    let id = UUID()
+    let userText: String
+    var assistantSummary: String?
+    var result: DiscoveryResult?
+}
+
+private struct DiscoveryConversationState {
+    enum MediaMode {
+        case any
+        case movieOnly
+        case tvOnly
     }
 
-    @ViewBuilder
-    private func assistantBubble(_ text: String) -> some View {
-        HStack {
-            Text(text)
-                .font(.subheadline)
-                .foregroundStyle(.white)
-                .padding(12)
-                .background(Color.white.opacity(0.16))
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-            Spacer(minLength: 24)
+    var topic: String? = nil
+    var documentaryOnly = false
+    var fictionPreference: String? = nil
+    var mediaMode: MediaMode = .any
+
+    var effectiveQuery: String {
+        var parts: [String] = []
+        if let topic, !topic.isEmpty {
+            parts.append(topic)
         }
-    }
 
-    @ViewBuilder
-    private func userBubble(_ text: String) -> some View {
-        HStack {
-            Spacer(minLength: 24)
-            Text(text)
-                .font(.subheadline)
-                .foregroundStyle(Color(red: 0.03, green: 0.20, blue: 0.46))
-                .padding(12)
-                .background(Color.white.opacity(0.95))
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+        if documentaryOnly {
+            parts.append("documentary only")
         }
+
+        if let fictionPreference {
+            parts.append("preference: \(fictionPreference)")
+        }
+
+        switch mediaMode {
+        case .movieOnly:
+            parts.append("movies only")
+        case .tvOnly:
+            parts.append("tv shows only")
+        case .any:
+            break
+        }
+
+        return parts.joined(separator: " | ")
     }
 
-    private func submitDraft() async {
-        let query = draftQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return }
+    var summaryLine: String {
+        var tags: [String] = []
+        if let topic, !topic.isEmpty { tags.append("Topic: \(topic)") }
+        if documentaryOnly { tags.append("Documentary mode") }
+        if let fictionPreference { tags.append(fictionPreference) }
+        switch mediaMode {
+        case .movieOnly: tags.append("Movies only")
+        case .tvOnly: tags.append("TV only")
+        case .any: break
+        }
 
-        submittedQuery = query
-        isSearching = true
-        result = nil
-
-        let discovery = await DiscoveryEngine.shared.discover(
-            interest: query,
-            userMovies: movies,
-            userTVShows: tvShows
-        )
-
-        result = discovery
-        isSearching = false
+        if tags.isEmpty {
+            return "Understood. Here are my top picks."
+        }
+        return "Understood. Applied: \(tags.joined(separator: ", "))."
     }
 }
 

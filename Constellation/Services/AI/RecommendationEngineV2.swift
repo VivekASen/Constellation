@@ -7,6 +7,7 @@ final class RecommendationEngineV2 {
     static let shared = RecommendationEngineV2()
     private let minimumMovieVoteCount = 180
     private let minimumTVVoteCount = 120
+    private let documentaryGenreID = 99
     
     private let seedCatalog: [String: [String]] = [
         "space": ["Interstellar", "The Martian", "Apollo 13", "Gravity", "The Expanse", "For All Mankind", "Contact"],
@@ -37,6 +38,7 @@ final class RecommendationEngineV2 {
         userMovies: [Movie],
         userTVShows: [TVShow]
     ) async -> RecommendationResult {
+        let intent = parseIntent(from: query)
         let candidateQueries = buildCandidateQueries(query: query, understanding: understanding)
         
         let movieCandidates = await fetchMovieCandidates(queries: candidateQueries)
@@ -48,9 +50,11 @@ final class RecommendationEngineV2 {
         let filteredMovies = dedupeMovies(movieCandidates)
             .filter { !movieLibraryIDs.contains($0.id) }
             .filter { ($0.voteCount ?? 0) >= minimumMovieVoteCount || ($0.voteAverage ?? 0) >= 7.9 }
+            .filter { satisfiesMovieIntent($0, intent: intent) }
         let filteredTVShows = dedupeTVShows(tvCandidates)
             .filter { !tvLibraryIDs.contains($0.id) }
             .filter { ($0.voteCount ?? 0) >= minimumTVVoteCount || ($0.voteAverage ?? 0) >= 8.0 }
+            .filter { satisfiesTVIntent($0, intent: intent) }
         
         let movieRanks = rankMovies(
             filteredMovies,
@@ -347,6 +351,56 @@ final class RecommendationEngineV2 {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
+    private func parseIntent(from query: String) -> RecommendationIntent {
+        let normalized = normalize(query)
+        
+        let documentaryOnly = normalized.contains("documentary")
+            || normalized.contains("documentaries")
+            || normalized.contains("docuseries")
+            || normalized.contains("non fiction")
+            || normalized.contains("nonfiction")
+        
+        let movieOnly = normalized.contains("movie only")
+            || normalized.contains("movies only")
+            || normalized.contains("films only")
+        
+        let tvOnly = normalized.contains("tv only")
+            || normalized.contains("show only")
+            || normalized.contains("series only")
+            || normalized.contains("tv shows only")
+        
+        let mediaMode: RecommendationMediaMode
+        if movieOnly && !tvOnly {
+            mediaMode = .movieOnly
+        } else if tvOnly && !movieOnly {
+            mediaMode = .tvOnly
+        } else {
+            mediaMode = .any
+        }
+        
+        return RecommendationIntent(mediaMode: mediaMode, documentaryOnly: documentaryOnly)
+    }
+    
+    private func satisfiesMovieIntent(_ movie: TMDBMovie, intent: RecommendationIntent) -> Bool {
+        if intent.mediaMode == .tvOnly { return false }
+        guard intent.documentaryOnly else { return true }
+        if let genreIDs = movie.genreIDs {
+            return genreIDs.contains(documentaryGenreID)
+        }
+        let haystack = normalize([movie.title, movie.overview ?? ""].joined(separator: " "))
+        return haystack.contains("documentary") || haystack.contains("docuseries")
+    }
+
+    private func satisfiesTVIntent(_ show: TMDBTVShow, intent: RecommendationIntent) -> Bool {
+        if intent.mediaMode == .movieOnly { return false }
+        guard intent.documentaryOnly else { return true }
+        if let genreIDs = show.genreIDs {
+            return genreIDs.contains(documentaryGenreID)
+        }
+        let haystack = normalize([show.title, show.overview ?? ""].joined(separator: " "))
+        return haystack.contains("documentary") || haystack.contains("docuseries")
+    }
+    
     private func jaccard(_ a: Set<String>, _ b: Set<String>) -> Double {
         guard !a.isEmpty || !b.isEmpty else { return 0 }
         let intersection = a.intersection(b).count
@@ -394,6 +448,17 @@ struct RankedTVRecommendation {
 struct RecommendationResult {
     let movies: [RankedMovieRecommendation]
     let tvShows: [RankedTVRecommendation]
+}
+
+private struct RecommendationIntent {
+    let mediaMode: RecommendationMediaMode
+    let documentaryOnly: Bool
+}
+
+private enum RecommendationMediaMode {
+    case any
+    case movieOnly
+    case tvOnly
 }
 
 struct RecommendationRankingConfig {
