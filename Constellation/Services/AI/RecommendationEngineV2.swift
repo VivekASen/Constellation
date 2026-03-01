@@ -52,31 +52,43 @@ final class RecommendationEngineV2 {
     private let topicAliasCatalog: [String: TopicAlias] = [
         "world war 2": TopicAlias(
             phrases: ["world war 2", "world war ii", "ww2", "wwii", "second world war"],
-            tokens: ["wwii", "nazi", "allied", "holocaust", "wehrmacht", "resistance", "war"]
+            tokens: ["wwii", "world war ii", "world war 2", "nazi", "allied", "axis", "holocaust", "hitler", "normandy", "dunkirk", "wehrmacht", "resistance"],
+            mustContainAny: ["wwii", "nazi", "allied", "axis", "holocaust", "hitler", "normandy", "dunkirk", "wehrmacht"]
         ),
         "world war ii": TopicAlias(
             phrases: ["world war 2", "world war ii", "ww2", "wwii", "second world war"],
-            tokens: ["wwii", "nazi", "allied", "holocaust", "wehrmacht", "resistance", "war"]
+            tokens: ["wwii", "world war ii", "world war 2", "nazi", "allied", "axis", "holocaust", "hitler", "normandy", "dunkirk", "wehrmacht", "resistance"],
+            mustContainAny: ["wwii", "nazi", "allied", "axis", "holocaust", "hitler", "normandy", "dunkirk", "wehrmacht"]
         ),
         "ww2": TopicAlias(
             phrases: ["world war 2", "world war ii", "ww2", "wwii", "second world war"],
-            tokens: ["wwii", "nazi", "allied", "holocaust", "wehrmacht", "resistance", "war"]
+            tokens: ["wwii", "world war ii", "world war 2", "nazi", "allied", "axis", "holocaust", "hitler", "normandy", "dunkirk", "wehrmacht", "resistance"],
+            mustContainAny: ["wwii", "nazi", "allied", "axis", "holocaust", "hitler", "normandy", "dunkirk", "wehrmacht"]
         ),
         "wwii": TopicAlias(
             phrases: ["world war 2", "world war ii", "ww2", "wwii", "second world war"],
-            tokens: ["wwii", "nazi", "allied", "holocaust", "wehrmacht", "resistance", "war"]
+            tokens: ["wwii", "world war ii", "world war 2", "nazi", "allied", "axis", "holocaust", "hitler", "normandy", "dunkirk", "wehrmacht", "resistance"],
+            mustContainAny: ["wwii", "nazi", "allied", "axis", "holocaust", "hitler", "normandy", "dunkirk", "wehrmacht"]
         ),
         "ancient rome": TopicAlias(
             phrases: ["ancient rome", "roman empire", "roman republic", "julius caesar", "rome"],
-            tokens: ["roman", "rome", "caesar", "empire", "republic", "gladiator", "legion"]
+            tokens: ["roman", "rome", "caesar", "empire", "republic", "gladiator", "legion", "senate"],
+            mustContainAny: ["roman", "rome", "caesar", "gladiator", "legion", "senate"]
         ),
         "roman empire": TopicAlias(
             phrases: ["ancient rome", "roman empire", "roman republic", "julius caesar", "rome"],
-            tokens: ["roman", "rome", "caesar", "empire", "republic", "gladiator", "legion"]
+            tokens: ["roman", "rome", "caesar", "empire", "republic", "gladiator", "legion", "senate"],
+            mustContainAny: ["roman", "rome", "caesar", "gladiator", "legion", "senate"]
+        ),
+        "bee": TopicAlias(
+            phrases: ["bee", "bees", "honey bee", "honeybee", "beekeeping", "pollination", "hive"],
+            tokens: ["bee", "bees", "honey", "hive", "pollination", "beekeeper", "insect"],
+            mustContainAny: ["bee", "bees", "hive", "pollination", "honey", "beekeeper"]
         ),
         "bees": TopicAlias(
             phrases: ["bees", "honey bee", "beekeeping", "pollination", "hive"],
-            tokens: ["bee", "bees", "honey", "hive", "pollination", "beekeeper", "insect"]
+            tokens: ["bee", "bees", "honey", "hive", "pollination", "beekeeper", "insect"],
+            mustContainAny: ["bee", "bees", "hive", "pollination", "honey", "beekeeper"]
         )
     ]
     
@@ -617,21 +629,29 @@ final class RecommendationEngineV2 {
     }
 
     private func buildTopicConstraint(query: String, understanding: QueryUnderstanding) -> TopicConstraint {
-        let normalizedQuery = normalize(query)
+        let focused = sanitizeQueryForSearch(query)
+            .split(separator: "|")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first ?? sanitizeQueryForSearch(query)
+        let normalizedQuery = normalize(focused)
         var phrases: Set<String> = []
         var tokens: Set<String> = []
+        var mustContainAny: Set<String> = []
         var strict = false
 
         for (key, alias) in topicAliasCatalog where normalizedQuery.contains(key) {
             phrases.formUnion(alias.phrases.map(normalize))
             tokens.formUnion(alias.tokens.map(normalize))
+            mustContainAny.formUnion(alias.mustContainAny.map(normalize))
             strict = true
         }
 
         let understandingTokens = tokenize((understanding.themes + understanding.genres).joined(separator: " "))
         let queryTokens = tokenize(normalizedQuery).filter { !topicStopTokens.contains($0) }
 
-        tokens.formUnion(understandingTokens.filter { !topicStopTokens.contains($0) })
+        if !strict {
+            tokens.formUnion(understandingTokens.filter { !topicStopTokens.contains($0) })
+        }
         tokens.formUnion(queryTokens)
 
         if strict && tokens.count < 2 {
@@ -642,6 +662,7 @@ final class RecommendationEngineV2 {
         return TopicConstraint(
             requiredPhrases: Array(phrases),
             requiredTokens: tokens,
+            mustContainAny: mustContainAny,
             strict: strict,
             seedQueries: seedQueries
         )
@@ -683,11 +704,13 @@ private enum RecommendationMediaMode {
 private struct TopicAlias {
     let phrases: [String]
     let tokens: [String]
+    let mustContainAny: [String]
 }
 
 private struct TopicConstraint {
     let requiredPhrases: [String]
     let requiredTokens: Set<String>
+    let mustContainAny: Set<String>
     let strict: Bool
     let seedQueries: [String]
 
@@ -705,6 +728,10 @@ private struct TopicConstraint {
 
         let tokenHits = tokens.intersection(requiredTokens).count
         if strict {
+            if !mustContainAny.isEmpty {
+                let mustHit = tokens.intersection(mustContainAny).count > 0
+                return mustHit
+            }
             return tokenHits >= min(2, max(1, requiredTokens.count))
         }
         return tokenHits >= 1
