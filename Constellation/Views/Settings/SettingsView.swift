@@ -11,7 +11,8 @@ struct SettingsView: View {
     @AppStorage("theme.semanticMatchThreshold") private var semanticThreshold = 0.79
     @AppStorage("recommend.semanticWeight") private var recommendationSemanticWeight = 0.58
     @AppStorage("recommend.qualityWeight") private var recommendationQualityWeight = 0.28
-    @AppStorage("recommend.noveltyWeight") private var recommendationNoveltyWeight = 0.14
+    @AppStorage("recommend.popularityWeight") private var recommendationPopularityWeight = 0.20
+    @AppStorage("recommend.noveltyWeight") private var recommendationNoveltyWeight = 0.10
     @AppStorage("recommend.diversityBalance") private var recommendationDiversityBalance = 0.78
     
     var body: some View {
@@ -47,6 +48,9 @@ struct SettingsView: View {
                         weightRow(title: "Quality", value: recommendationQualityWeight)
                         Slider(value: $recommendationQualityWeight, in: 0.05...0.80, step: 0.01)
                         
+                        weightRow(title: "Popularity", value: recommendationPopularityWeight)
+                        Slider(value: $recommendationPopularityWeight, in: 0.05...0.80, step: 0.01)
+                        
                         weightRow(title: "Novelty", value: recommendationNoveltyWeight)
                         Slider(value: $recommendationNoveltyWeight, in: 0.05...0.60, step: 0.01)
                         
@@ -61,7 +65,8 @@ struct SettingsView: View {
                     Button("Reset Recommendation Defaults") {
                         recommendationSemanticWeight = 0.58
                         recommendationQualityWeight = 0.28
-                        recommendationNoveltyWeight = 0.14
+                        recommendationPopularityWeight = 0.20
+                        recommendationNoveltyWeight = 0.10
                         recommendationDiversityBalance = 0.78
                     }
                 }

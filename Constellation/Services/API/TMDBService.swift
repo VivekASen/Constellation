@@ -92,12 +92,14 @@ struct TMDBMovie: Codable, Identifiable {
     let posterPath: String?
     let releaseDate: String?
     let voteAverage: Double?
+    let voteCount: Int?
     
     enum CodingKeys: String, CodingKey {
         case id, title, overview
         case posterPath = "poster_path"
         case releaseDate = "release_date"
         case voteAverage = "vote_average"
+        case voteCount = "vote_count"
     }
     
     var posterURL: URL? {
@@ -157,12 +159,14 @@ struct TMDBTVShow: Codable, Identifiable {
     let posterPath: String?
     let firstAirDate: String?
     let voteAverage: Double?
+    let voteCount: Int?
     
     enum CodingKeys: String, CodingKey {
         case id, name, overview
         case posterPath = "poster_path"
         case firstAirDate = "first_air_date"
         case voteAverage = "vote_average"
+        case voteCount = "vote_count"
     }
     
     var title: String { name }

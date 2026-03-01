@@ -5,6 +5,8 @@ import Foundation
 /// to remain stable as additional media sources (podcasts/books/articles) are added.
 final class RecommendationEngineV2 {
     static let shared = RecommendationEngineV2()
+    private let minimumMovieVoteCount = 180
+    private let minimumTVVoteCount = 120
     
     private let seedCatalog: [String: [String]] = [
         "space": ["Interstellar", "The Martian", "Apollo 13", "Gravity", "The Expanse", "For All Mankind", "Contact"],
@@ -43,8 +45,12 @@ final class RecommendationEngineV2 {
         let movieLibraryIDs = Set(userMovies.compactMap(\.tmdbID))
         let tvLibraryIDs = Set(userTVShows.compactMap(\.tmdbID))
         
-        let filteredMovies = dedupeMovies(movieCandidates).filter { !movieLibraryIDs.contains($0.id) }
-        let filteredTVShows = dedupeTVShows(tvCandidates).filter { !tvLibraryIDs.contains($0.id) }
+        let filteredMovies = dedupeMovies(movieCandidates)
+            .filter { !movieLibraryIDs.contains($0.id) }
+            .filter { ($0.voteCount ?? 0) >= minimumMovieVoteCount || ($0.voteAverage ?? 0) >= 7.9 }
+        let filteredTVShows = dedupeTVShows(tvCandidates)
+            .filter { !tvLibraryIDs.contains($0.id) }
+            .filter { ($0.voteCount ?? 0) >= minimumTVVoteCount || ($0.voteAverage ?? 0) >= 8.0 }
         
         let movieRanks = rankMovies(
             filteredMovies,
@@ -173,16 +179,23 @@ final class RecommendationEngineV2 {
                 .max() ?? 0
             let novelty = 1.0 - maxSeenSimilarity
             
-            let rawScore =
+            let popularity = normalizedPopularity(voteCount: movie.voteCount)
+            var rawScore =
                 config.semanticWeight * semantic +
                 config.qualityWeight * quality +
+                config.popularityWeight * popularity +
                 config.noveltyWeight * novelty
+            
+            if (movie.voteCount ?? 0) < minimumMovieVoteCount {
+                rawScore -= 0.12
+            }
             
             let reasons = buildReasons(
                 semantic: semantic,
                 quality: quality,
+                popularity: popularity,
                 novelty: novelty,
-                title: movie.title
+                voteCount: movie.voteCount ?? 0
             )
             
             return RankedMovieRecommendation(movie: movie, score: rawScore, reasons: reasons)
@@ -213,16 +226,23 @@ final class RecommendationEngineV2 {
                 .max() ?? 0
             let novelty = 1.0 - maxSeenSimilarity
             
-            let rawScore =
+            let popularity = normalizedPopularity(voteCount: show.voteCount)
+            var rawScore =
                 config.semanticWeight * semantic +
                 config.qualityWeight * quality +
+                config.popularityWeight * popularity +
                 config.noveltyWeight * novelty
+            
+            if (show.voteCount ?? 0) < minimumTVVoteCount {
+                rawScore -= 0.12
+            }
             
             let reasons = buildReasons(
                 semantic: semantic,
                 quality: quality,
+                popularity: popularity,
                 novelty: novelty,
-                title: show.title
+                voteCount: show.voteCount ?? 0
             )
             
             return RankedTVRecommendation(show: show, score: rawScore, reasons: reasons)
@@ -289,14 +309,27 @@ final class RecommendationEngineV2 {
     
     // MARK: - Helpers
     
-    private func buildReasons(semantic: Double, quality: Double, novelty: Double, title: String) -> [String] {
+    private func buildReasons(
+        semantic: Double,
+        quality: Double,
+        popularity: Double,
+        novelty: Double,
+        voteCount: Int
+    ) -> [String] {
         var reasons: [(String, Double)] = [
             ("Strong thematic match", semantic),
             ("High audience rating", quality),
+            ("Well-known pick", popularity),
             ("Novel versus your library", novelty)
         ]
         reasons.sort { $0.1 > $1.1 }
-        return reasons.prefix(2).map(\.0)
+        var selected = reasons.prefix(2).map(\.0)
+        if selected.contains("Well-known pick") {
+            selected = selected.map { value in
+                value == "Well-known pick" ? "Well-known pick (\(voteCount) ratings)" : value
+            }
+        }
+        return selected
     }
     
     private func tokenize(_ text: String) -> Set<String> {
@@ -319,6 +352,14 @@ final class RecommendationEngineV2 {
         let intersection = a.intersection(b).count
         let union = a.union(b).count
         return union == 0 ? 0 : Double(intersection) / Double(union)
+    }
+    
+    private func normalizedPopularity(voteCount: Int?) -> Double {
+        let count = max(0, voteCount ?? 0)
+        guard count > 0 else { return 0 }
+        // Log-scaling keeps major titles ahead without letting popularity fully dominate.
+        let scaled = log(Double(count) + 1.0) / log(6000.0)
+        return min(1.0, max(0.0, scaled))
     }
     
     private func cleanSuggestion(_ suggestion: String) -> String? {
@@ -358,11 +399,13 @@ struct RecommendationResult {
 struct RecommendationRankingConfig {
     let semanticWeight: Double
     let qualityWeight: Double
+    let popularityWeight: Double
     let noveltyWeight: Double
     let diversityBalance: Double
     
     private static let semanticKey = "recommend.semanticWeight"
     private static let qualityKey = "recommend.qualityWeight"
+    private static let popularityKey = "recommend.popularityWeight"
     private static let noveltyKey = "recommend.noveltyWeight"
     private static let diversityKey = "recommend.diversityBalance"
     
@@ -371,7 +414,8 @@ struct RecommendationRankingConfig {
         return RecommendationRankingConfig(
             semanticWeight: defaults.object(forKey: semanticKey) as? Double ?? 0.58,
             qualityWeight: defaults.object(forKey: qualityKey) as? Double ?? 0.28,
-            noveltyWeight: defaults.object(forKey: noveltyKey) as? Double ?? 0.14,
+            popularityWeight: defaults.object(forKey: popularityKey) as? Double ?? 0.20,
+            noveltyWeight: defaults.object(forKey: noveltyKey) as? Double ?? 0.10,
             diversityBalance: defaults.object(forKey: diversityKey) as? Double ?? 0.78
         )
     }
