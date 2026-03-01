@@ -11,6 +11,11 @@ struct DiscoveryView: View {
     @State private var conversationState = DiscoveryConversationState()
     @State private var showingAddMovie: TMDBMovie?
     @State private var showingAddTVShow: TMDBTVShow?
+    @State private var pendingMovieForAddFeedback: TMDBMovie?
+    @State private var pendingTVForAddFeedback: TMDBTVShow?
+    @State private var addedMovieIDs: Set<Int> = []
+    @State private var addedTVIDs: Set<Int> = []
+    @State private var toastMessage: String?
 
     private let starterPrompts = [
         "space exploration",
@@ -45,28 +50,44 @@ struct DiscoveryView: View {
                                 }
 
                                 if let movie = turn.result?.recommendations.first {
+                                    let isAdded = isMovieInLibrary(movie.id)
                                     mediaBubble(
                                         title: movie.title,
                                         subtitle: mediaSubtitle(year: movie.year, rating: movie.voteAverage),
                                         reason: turn.result?.movieRecommendationReasons[movie.id] ?? "Strong fit for your request",
                                         posterURL: movie.posterURL,
                                         emoji: "🎬",
-                                        actionTitle: "Add Movie",
-                                        action: { showingAddMovie = movie },
-                                        onTap: { showingAddMovie = movie }
+                                        actionTitle: isAdded ? "Added" : "Add Movie",
+                                        isAdded: isAdded,
+                                        action: {
+                                            pendingMovieForAddFeedback = movie
+                                            showingAddMovie = movie
+                                        },
+                                        onTap: {
+                                            pendingMovieForAddFeedback = movie
+                                            showingAddMovie = movie
+                                        }
                                     )
                                 }
 
                                 if let show = turn.result?.tvRecommendations.first {
+                                    let isAdded = isTVInLibrary(show.id)
                                     mediaBubble(
                                         title: show.title,
                                         subtitle: mediaSubtitle(year: show.year, rating: show.voteAverage),
                                         reason: turn.result?.tvRecommendationReasons[show.id] ?? "Strong fit for your request",
                                         posterURL: show.posterURL,
                                         emoji: "📺",
-                                        actionTitle: "Add TV Show",
-                                        action: { showingAddTVShow = show },
-                                        onTap: { showingAddTVShow = show }
+                                        actionTitle: isAdded ? "Added" : "Add TV Show",
+                                        isAdded: isAdded,
+                                        action: {
+                                            pendingTVForAddFeedback = show
+                                            showingAddTVShow = show
+                                        },
+                                        onTap: {
+                                            pendingTVForAddFeedback = show
+                                            showingAddTVShow = show
+                                        }
                                     )
                                 }
 
@@ -115,6 +136,16 @@ struct DiscoveryView: View {
                     Spacer()
                     composer
                 }
+
+                if let toastMessage {
+                    VStack {
+                        Spacer()
+                        toastView(text: toastMessage)
+                            .padding(.bottom, 86)
+                    }
+                    .padding(.horizontal, 20)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
             .navigationTitle("Discover")
             .navigationBarTitleDisplayMode(.inline)
@@ -128,10 +159,10 @@ struct DiscoveryView: View {
                     .disabled(turns.isEmpty && conversationState.topic == nil)
                 }
             }
-            .sheet(item: $showingAddMovie) { movie in
+            .sheet(item: $showingAddMovie, onDismiss: handleMovieSheetDismiss) { movie in
                 MovieDetailSheet(movie: movie)
             }
-            .sheet(item: $showingAddTVShow) { show in
+            .sheet(item: $showingAddTVShow, onDismiss: handleTVSheetDismiss) { show in
                 TVShowDetailSheet(show: show)
             }
         }
@@ -314,10 +345,55 @@ struct DiscoveryView: View {
         terms.contains { text.contains($0) }
     }
 
+    private func isMovieInLibrary(_ tmdbID: Int) -> Bool {
+        addedMovieIDs.contains(tmdbID) || movies.contains(where: { $0.tmdbID == tmdbID })
+    }
+
+    private func isTVInLibrary(_ tmdbID: Int) -> Bool {
+        addedTVIDs.contains(tmdbID) || tvShows.contains(where: { $0.tmdbID == tmdbID })
+    }
+
+    private func handleMovieSheetDismiss() {
+        guard let candidate = pendingMovieForAddFeedback else { return }
+        defer { pendingMovieForAddFeedback = nil }
+
+        guard movies.contains(where: { $0.tmdbID == candidate.id }) else { return }
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) {
+            addedMovieIDs.insert(candidate.id)
+        }
+        showToast("Added \(candidate.title)")
+    }
+
+    private func handleTVSheetDismiss() {
+        guard let candidate = pendingTVForAddFeedback else { return }
+        defer { pendingTVForAddFeedback = nil }
+
+        guard tvShows.contains(where: { $0.tmdbID == candidate.id }) else { return }
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) {
+            addedTVIDs.insert(candidate.id)
+        }
+        showToast("Added \(candidate.title)")
+    }
+
+    private func showToast(_ message: String) {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            toastMessage = message
+        }
+        Task {
+            try? await Task.sleep(nanoseconds: 1_900_000_000)
+            if !Task.isCancelled {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    toastMessage = nil
+                }
+            }
+        }
+    }
+
     private func resetConversation() {
         turns.removeAll()
         conversationState = DiscoveryConversationState()
         draftQuery = ""
+        toastMessage = nil
     }
 
     private func mediaSubtitle(year: Int?, rating: Double?) -> String {
@@ -366,6 +442,7 @@ struct DiscoveryView: View {
         posterURL: URL?,
         emoji: String,
         actionTitle: String?,
+        isAdded: Bool = false,
         action: (() -> Void)?,
         onTap: (() -> Void)?
     ) -> some View {
@@ -407,9 +484,18 @@ struct DiscoveryView: View {
                     .font(.caption.weight(.semibold))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(appBlue.opacity(0.14))
-                    .foregroundStyle(appBlue)
+                    .background(isAdded ? Color.green.opacity(0.16) : appBlue.opacity(0.14))
+                    .foregroundStyle(isAdded ? Color.green : appBlue)
                     .clipShape(Capsule())
+                    .overlay(alignment: .trailing) {
+                        if isAdded {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.green)
+                                .offset(x: 7, y: -10)
+                                .symbolEffect(.bounce, value: isAdded)
+                        }
+                    }
                 }
             }
 
@@ -426,6 +512,24 @@ struct DiscoveryView: View {
         .onTapGesture {
             onTap?()
         }
+    }
+
+    private func toastView(text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+            Text(text)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color(uiColor: .systemBackground))
+        .clipShape(Capsule())
+        .overlay {
+            Capsule().stroke(Color.black.opacity(0.10), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 4)
     }
 }
 
