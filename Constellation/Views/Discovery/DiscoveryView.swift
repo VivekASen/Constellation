@@ -18,24 +18,19 @@ struct DiscoveryView: View {
         "thoughtful sci fi"
     ]
 
+    private let appBlue = Color(red: 0.10, green: 0.43, blue: 0.95)
+    private let surface = Color(uiColor: .secondarySystemBackground)
+    private let pageBackground = Color(uiColor: .systemGroupedBackground)
+
     var body: some View {
         NavigationStack {
             ZStack {
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.05, green: 0.22, blue: 0.52),
-                        Color(red: 0.06, green: 0.18, blue: 0.43),
-                        Color(red: 0.03, green: 0.11, blue: 0.29)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .ignoresSafeArea()
+                pageBackground.ignoresSafeArea()
 
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 14) {
-                            assistantBubble("Tell me a topic and I will keep refining with you. I will return one strong movie pick and one strong TV pick each turn.")
+                            assistantBubble("Tell me a topic and I’ll keep refining with you. I’ll return one strong movie pick and one strong TV pick each turn.")
 
                             if turns.isEmpty {
                                 starterPromptSection
@@ -75,12 +70,22 @@ struct DiscoveryView: View {
                                 if let result = turn.result,
                                    result.recommendations.isEmpty,
                                    result.tvRecommendations.isEmpty {
-                                    assistantBubble("I could not find confident picks for that yet. Add one more concrete cue (topic, format, or fiction/non-fiction).")
+                                    assistantBubble("I could not find confident picks yet. Add one concrete cue like topic, format, or fiction/non-fiction.")
                                 }
                             }
 
                             if isSearching {
-                                assistantBubble("Updating recommendations with your latest message...")
+                                HStack(spacing: 8) {
+                                    ProgressView()
+                                        .progressViewStyle(.circular)
+                                        .tint(.secondary)
+                                    Text("Updating recommendations...")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(12)
+                                .background(surface)
+                                .clipShape(RoundedRectangle(cornerRadius: 14))
                             }
 
                             Color.clear
@@ -110,6 +115,16 @@ struct DiscoveryView: View {
             }
             .navigationTitle("Discover")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        resetConversation()
+                    } label: {
+                        Label("Reset", systemImage: "arrow.counterclockwise")
+                    }
+                    .disabled(turns.isEmpty && conversationState.topic == nil)
+                }
+            }
             .sheet(item: $showingAddMovie) { movie in
                 MovieDetailSheet(movie: movie)
             }
@@ -120,10 +135,14 @@ struct DiscoveryView: View {
         HStack(spacing: 10) {
             TextField("Type your next message...", text: $draftQuery)
                 .textFieldStyle(.plain)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(Color.white.opacity(0.92))
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(Color(uiColor: .systemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 18))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18)
+                        .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                }
                 .onSubmit {
                     Task { await submitMessage(draftQuery) }
                 }
@@ -131,22 +150,25 @@ struct DiscoveryView: View {
             Button {
                 Task { await submitMessage(draftQuery) }
             } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(draftQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .gray.opacity(0.5) : .white)
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(draftQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.gray.opacity(0.45) : appBlue)
+                    .clipShape(Circle())
             }
             .disabled(draftQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial)
+        .padding(.vertical, 12)
+        .background(Color(uiColor: .systemGroupedBackground).opacity(0.96))
     }
 
     private var starterPromptSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Starter prompts")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.8))
+                .foregroundStyle(.secondary)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -155,17 +177,20 @@ struct DiscoveryView: View {
                             Task { await submitMessage(prompt) }
                         }
                         .font(.caption)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.white.opacity(0.16))
-                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color(uiColor: .systemBackground))
+                        .foregroundStyle(.primary)
                         .clipShape(Capsule())
+                        .overlay {
+                            Capsule().stroke(Color.black.opacity(0.08), lineWidth: 1)
+                        }
                     }
                 }
             }
         }
         .padding(12)
-        .background(Color.white.opacity(0.10))
+        .background(surface)
         .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 
@@ -200,12 +225,6 @@ struct DiscoveryView: View {
 
     private func updateConversationState(with message: String) {
         let normalized = normalizedIntentText(message)
-
-        if containsAny(normalized, terms: ["reset", "start over", "new topic"]) {
-            conversationState = DiscoveryConversationState(topic: nil)
-            return
-        }
-
         let appliedConstraint = applyConstraints(from: normalized)
 
         if conversationState.topic == nil {
@@ -289,6 +308,12 @@ struct DiscoveryView: View {
         terms.contains { text.contains($0) }
     }
 
+    private func resetConversation() {
+        turns.removeAll()
+        conversationState = DiscoveryConversationState()
+        draftQuery = ""
+    }
+
     private func mediaSubtitle(year: Int?, rating: Double?) -> String {
         let yearText = year.map(String.init) ?? "Year unknown"
         let ratingText = rating.map { String(format: "%.1f", $0) } ?? "-"
@@ -300,10 +325,15 @@ struct DiscoveryView: View {
         HStack {
             Text(text)
                 .font(.subheadline)
-                .foregroundStyle(.white)
-                .padding(12)
-                .background(Color.white.opacity(0.16))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(surface)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                }
             Spacer(minLength: 24)
         }
     }
@@ -314,9 +344,10 @@ struct DiscoveryView: View {
             Spacer(minLength: 24)
             Text(text)
                 .font(.subheadline)
-                .foregroundStyle(Color(red: 0.03, green: 0.20, blue: 0.46))
-                .padding(12)
-                .background(Color.white.opacity(0.95))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(appBlue)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
         }
     }
@@ -350,16 +381,16 @@ struct DiscoveryView: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                     .lineLimit(2)
 
                 Text(subtitle)
                     .font(.caption)
-                    .foregroundStyle(.white.opacity(0.75))
+                    .foregroundStyle(.secondary)
 
                 Text(reason)
                     .font(.caption)
-                    .foregroundStyle(.white.opacity(0.9))
+                    .foregroundStyle(.secondary)
                     .lineLimit(3)
 
                 if let actionTitle, let action {
@@ -369,8 +400,8 @@ struct DiscoveryView: View {
                     .font(.caption.weight(.semibold))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(Color.white.opacity(0.2))
-                    .foregroundStyle(.white)
+                    .background(appBlue.opacity(0.14))
+                    .foregroundStyle(appBlue)
                     .clipShape(Capsule())
                 }
             }
@@ -378,8 +409,12 @@ struct DiscoveryView: View {
             Spacer(minLength: 0)
         }
         .padding(12)
-        .background(Color.white.opacity(0.13))
+        .background(Color(uiColor: .systemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.black.opacity(0.07), lineWidth: 1)
+        }
     }
 }
 
