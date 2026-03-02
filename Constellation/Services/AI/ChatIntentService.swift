@@ -146,6 +146,9 @@ final class ChatIntentService {
         if containsAny(normalizedMessage, terms: ["more", "another", "similar", "keep going", "next", "same"]) {
             return false
         }
+        if isLikelyPropertyRefinement(normalizedMessage) {
+            return false
+        }
         if isMetaOnlyMessage(normalizedMessage) {
             return false
         }
@@ -203,6 +206,10 @@ final class ChatIntentService {
             topicAction = .keep
             topicText = nil
             refinementText = nil
+        } else if state.topic != nil && isLikelyPropertyRefinement(normalized) {
+            topicAction = .refine
+            topicText = nil
+            refinementText = message.trimmingCharacters(in: .whitespacesAndNewlines)
         } else if state.topic == nil || explicitNewTopic || (standaloneTopic && !wantsMore) {
             topicAction = .startNew
             topicText = message.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -400,11 +407,38 @@ final class ChatIntentService {
     }
 
     private func isLikelyStandaloneTopic(_ normalized: String) -> Bool {
+        if isLikelyPropertyRefinement(normalized) {
+            return false
+        }
         if containsAny(normalized, terms: ["more", "another", "similar", "like this", "keep going"]) {
             return false
         }
         let tokens = normalized.split(separator: " ")
         return !tokens.isEmpty && tokens.count <= 6
+    }
+
+    private func isLikelyPropertyRefinement(_ normalized: String) -> Bool {
+        if containsAny(normalized, terms: [
+            "with a female lead", "female lead", "female protagonist", "woman lead",
+            "male lead", "ensemble cast", "starring", "directed by", "written by",
+            "set in", "set during", "based on", "true story", "real story",
+            "award winning", "oscar", "emmy", "golden globe", "bafta",
+            "from the 80s", "from the 90s", "from the 2000s", "from the 2010s",
+            "from the 2020s", "in japanese", "in english", "in korean",
+            "animated", "live action", "documentary style", "family friendly",
+            "not too dark", "less violent", "more serious", "more grounded"
+        ]) {
+            return true
+        }
+
+        // Natural follow-up style: "with ...", "that has ...", "where ..."
+        if normalized.hasPrefix("with ") || normalized.hasPrefix("that ") || normalized.hasPrefix("where ") {
+            return true
+        }
+        if normalized.hasPrefix("without ") || normalized.hasPrefix("only ") || normalized.hasPrefix("but ") {
+            return true
+        }
+        return false
     }
 
     private func sanitize(plan: ChatTurnPlan, message: String, state: ChatConversationState) -> ChatTurnPlan {
