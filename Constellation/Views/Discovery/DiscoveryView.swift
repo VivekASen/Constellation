@@ -52,6 +52,10 @@ struct DiscoveryView: View {
                                     assistantBubble(summary)
                                 }
 
+                                if let result = turn.result {
+                                    watchlistSection(from: result, display: turn.displayPreference)
+                                }
+
                                 if let result = turn.result, turn.displayPreference.movieLimit > 0 {
                                     ForEach(Array(displayedMovies(from: result).prefix(turn.displayPreference.movieLimit))) { movie in
                                         let isAdded = isMovieInLibrary(movie.id)
@@ -108,11 +112,6 @@ struct DiscoveryView: View {
                                         )
                                         .id("turn-\(turn.id.uuidString)-tv-\(show.id)")
                                     }
-                                }
-
-                                if let result = turn.result,
-                                   let highlight = watchlistHighlight(from: result, display: turn.displayPreference) {
-                                    watchlistHighlightCard(highlight)
                                 }
 
                             }
@@ -322,9 +321,7 @@ struct DiscoveryView: View {
                 ? plan.assistantLine
                 : intentService.fallbackAssistantSummary(plan: plan, state: conversationState))
             : "I couldn't find good matches for that topic yet. Try adding one more anchor like era, format, or region."
-        turn.assistantSummary = [baseSummary, watchlistContextNote(from: discovery)]
-            .compactMap { $0 }
-            .joined(separator: " ")
+        turn.assistantSummary = baseSummary
 
         turns[turnIndex] = turn
 
@@ -379,19 +376,6 @@ struct DiscoveryView: View {
         return result.tvRecommendations.filter { !rejected.contains($0.id) && !isTVInLibrary($0.id) }
     }
 
-    private func watchlistContextNote(from result: DiscoveryResult) -> String? {
-        let watchlistMovieTitles = result.inLibraryMovies
-            .filter { $0.watchedDate == nil }
-            .map(\.title)
-        let watchlistTVTitles = result.inLibraryTVShows
-            .filter { $0.watchedDate == nil }
-            .map(\.title)
-        let titles = Array(NSOrderedSet(array: watchlistMovieTitles + watchlistTVTitles)) as? [String] ?? []
-        guard !titles.isEmpty else { return nil }
-        let preview = titles.prefix(2).joined(separator: ", ")
-        return "Related in your watchlist: \(preview)."
-    }
-
     private func watchlistHighlight(from result: DiscoveryResult, display: ChatDisplayPreference) -> WatchlistHighlight? {
         let movieCandidates = result.inLibraryMovies.filter { $0.watchedDate == nil }
         let tvCandidates = result.inLibraryTVShows.filter { $0.watchedDate == nil }
@@ -411,6 +395,26 @@ struct DiscoveryView: View {
         if let movie = movieCandidates.first { return .movie(movie) }
         if let show = tvCandidates.first { return .tv(show) }
         return nil
+    }
+
+    @ViewBuilder
+    private func watchlistSection(from result: DiscoveryResult, display: ChatDisplayPreference) -> some View {
+        if let highlight = watchlistHighlight(from: result, display: display) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("From your watchlist")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                watchlistHighlightCard(highlight)
+            }
+            .padding(10)
+            .background(surface.opacity(0.8))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
+            }
+        }
     }
 
     @ViewBuilder
