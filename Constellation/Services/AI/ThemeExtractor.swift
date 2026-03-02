@@ -73,6 +73,12 @@ final class ThemeExtractor {
         "very", "just", "more", "less", "over", "under", "after", "before"
     ]
 
+    // Precision guard signals so certain themes require explicit evidence.
+    private let explicitAISignals: Set<String> = [
+        "ai", "artificial intelligence", "machine intelligence", "robot", "robots",
+        "android", "androids", "cyborg", "cybernetic", "sentient machine", "neural network"
+    ]
+
     private lazy var sentenceEmbedding = NLEmbedding.sentenceEmbedding(for: .english)
 
     // Live-tunable threshold via Settings.
@@ -207,6 +213,8 @@ final class ThemeExtractor {
                 scores[matched, default: 0] += 0.55
             }
         }
+
+        enforcePrecisionGuards(scores: &scores, normalizedText: normalizedText, tokens: tokens)
 
         var ranked = scores
             .sorted { lhs, rhs in
@@ -349,5 +357,31 @@ final class ThemeExtractor {
         let intersection = aSet.intersection(bSet).count
         let union = aSet.union(bSet).count
         return union == 0 ? 0.0 : Double(intersection) / Double(union)
+    }
+
+    private func enforcePrecisionGuards(
+        scores: inout [String: Double],
+        normalizedText: String,
+        tokens: [String]
+    ) {
+        if !hasExplicitSignal(in: normalizedText, tokens: tokens, signals: explicitAISignals) {
+            scores["artificial-intelligence"] = nil
+        }
+    }
+
+    private func hasExplicitSignal(
+        in normalizedText: String,
+        tokens: [String],
+        signals: Set<String>
+    ) -> Bool {
+        for signal in signals {
+            let normalizedSignal = normalize(signal)
+            if normalizedSignal.contains(" ") {
+                if normalizedText.contains(normalizedSignal) { return true }
+            } else if tokens.contains(normalizedSignal) {
+                return true
+            }
+        }
+        return false
     }
 }
