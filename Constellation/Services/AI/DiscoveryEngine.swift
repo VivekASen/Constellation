@@ -21,64 +21,70 @@ class DiscoveryEngine {
         excludedMovieIDs: Set<Int> = [],
         excludedTVIDs: Set<Int> = []
     ) async -> DiscoveryResult {
+        _ = userMovies
+        _ = userTVShows
         let understanding = await understandQuery(interest)
         let preferredMode = preferredMediaMode(from: interest)
-        
-        let movieMatches = findIntelligentMovieMatches(understanding: understanding, in: userMovies)
-        let tvMatches = findIntelligentTVMatches(understanding: understanding, in: userTVShows)
+        let rawTaste = (try? await TasteDiveService.shared.similar(query: interest, type: nil, limit: 20)) ?? []
 
-        let movieLibraryIDs = Set(userMovies.compactMap(\.tmdbID))
-        let tvLibraryIDs = Set(userTVShows.compactMap(\.tmdbID))
+        var movies: [TMDBMovie] = []
+        var tvShows: [TMDBTVShow] = []
+        var movieReasons: [Int: String] = [:]
+        var tvReasons: [Int: String] = [:]
+        var movieCoherence: [Int: Double] = [:]
+        var tvCoherence: [Int: Double] = [:]
+        var movieSemantic: [Int: Double] = [:]
+        var tvSemantic: [Int: Double] = [:]
+        var movieScore: [Int: Double] = [:]
+        var tvScore: [Int: Double] = [:]
 
-        let strictTaste = await fetchTasteDiveCandidatesStrict(
-            interest: interest,
-            understanding: understanding,
-            preferredMode: preferredMode
-        )
-        let movieRecommendations = strictTaste.movies.map(\.movie)
-            .filter { !movieLibraryIDs.contains($0.id) && !excludedMovieIDs.contains($0.id) }
-        let tvRecommendations = strictTaste.tvShows.map(\.show)
-            .filter { !tvLibraryIDs.contains($0.id) && !excludedTVIDs.contains($0.id) }
-        let movieReasons = Dictionary(
-            uniqueKeysWithValues: strictTaste.movies.map { ($0.movie.id, $0.reason) }
-        )
-        let tvReasons = Dictionary(
-            uniqueKeysWithValues: strictTaste.tvShows.map { ($0.show.id, $0.reason) }
-        )
-        let movieCoherence = Dictionary(
-            uniqueKeysWithValues: strictTaste.movies.map { ($0.movie.id, $0.coherence) }
-        )
-        let tvCoherence = Dictionary(
-            uniqueKeysWithValues: strictTaste.tvShows.map { ($0.show.id, $0.coherence) }
-        )
-        let movieSemantic = Dictionary(
-            uniqueKeysWithValues: strictTaste.movies.map { ($0.movie.id, $0.semantic) }
-        )
-        let tvSemantic = Dictionary(
-            uniqueKeysWithValues: strictTaste.tvShows.map { ($0.show.id, $0.semantic) }
-        )
-        let movieScore = Dictionary(
-            uniqueKeysWithValues: strictTaste.movies.map { ($0.movie.id, $0.score) }
-        )
-        let tvScore = Dictionary(
-            uniqueKeysWithValues: strictTaste.tvShows.map { ($0.show.id, $0.score) }
-        )
-        
-        let questions = generateFollowUpQuestions(
-            understanding: understanding,
-            movieMatches: movieMatches,
-            tvMatches: tvMatches,
-            movieRecommendations: movieRecommendations,
-            tvRecommendations: tvRecommendations
-        )
-        
+        for item in rawTaste {
+            let mediaKind = parseTasteType(item.type)
+            switch mediaKind {
+            case .movieOnly where preferredMode != .tvOnly:
+                let movie = syntheticMovie(from: item.name)
+                guard !excludedMovieIDs.contains(movie.id) else { continue }
+                guard !movies.contains(where: { $0.id == movie.id }) else { continue }
+                movies.append(movie)
+                movieReasons[movie.id] = "Taste graph match"
+                movieCoherence[movie.id] = 1.0
+                movieSemantic[movie.id] = 1.0
+                movieScore[movie.id] = 1.0
+            case .tvOnly where preferredMode != .movieOnly:
+                let show = syntheticTVShow(from: item.name)
+                guard !excludedTVIDs.contains(show.id) else { continue }
+                guard !tvShows.contains(where: { $0.id == show.id }) else { continue }
+                tvShows.append(show)
+                tvReasons[show.id] = "Taste graph match"
+                tvCoherence[show.id] = 1.0
+                tvSemantic[show.id] = 1.0
+                tvScore[show.id] = 1.0
+            default:
+                continue
+            }
+        }
+
+        // Fallback for cases where TasteDive does not label item type.
+        if movies.isEmpty && preferredMode != .tvOnly {
+            for item in rawTaste.prefix(8) {
+                let movie = syntheticMovie(from: item.name)
+                guard !excludedMovieIDs.contains(movie.id) else { continue }
+                guard !movies.contains(where: { $0.id == movie.id }) else { continue }
+                movies.append(movie)
+                movieReasons[movie.id] = "Taste graph match"
+                movieCoherence[movie.id] = 1.0
+                movieSemantic[movie.id] = 1.0
+                movieScore[movie.id] = 1.0
+            }
+        }
+
         return DiscoveryResult(
             query: interest,
             understanding: understanding,
-            inLibraryMovies: movieMatches,
-            inLibraryTVShows: tvMatches,
-            recommendations: movieRecommendations,
-            tvRecommendations: tvRecommendations,
+            inLibraryMovies: [],
+            inLibraryTVShows: [],
+            recommendations: movies,
+            tvRecommendations: tvShows,
             movieRecommendationReasons: movieReasons,
             tvRecommendationReasons: tvReasons,
             movieRecommendationCoherence: movieCoherence,
@@ -87,8 +93,8 @@ class DiscoveryEngine {
             tvRecommendationSemantic: tvSemantic,
             movieRecommendationScore: movieScore,
             tvRecommendationScore: tvScore,
-            followUpQuestions: questions,
-            connections: findConnections(inMovies: movieMatches, tvShows: tvMatches)
+            followUpQuestions: [],
+            connections: []
         )
     }
     
@@ -646,6 +652,42 @@ class DiscoveryEngine {
     private func dedupeScoredTVShowsInOrder(_ items: [ScoredTVRecommendation]) -> [ScoredTVRecommendation] {
         var seen = Set<Int>()
         return items.filter { seen.insert($0.show.id).inserted }
+    }
+
+    private func syntheticMovie(from title: String) -> TMDBMovie {
+        TMDBMovie(
+            id: syntheticID(type: "movie", title: title),
+            title: title,
+            overview: nil,
+            posterPath: nil,
+            releaseDate: nil,
+            voteAverage: nil,
+            voteCount: nil,
+            genreIDs: nil
+        )
+    }
+
+    private func syntheticTVShow(from title: String) -> TMDBTVShow {
+        TMDBTVShow(
+            id: syntheticID(type: "show", title: title),
+            name: title,
+            overview: nil,
+            posterPath: nil,
+            firstAirDate: nil,
+            voteAverage: nil,
+            voteCount: nil,
+            genreIDs: nil
+        )
+    }
+
+    private func syntheticID(type: String, title: String) -> Int {
+        let input = "\(type)-\(normalizeForCompare(title))"
+        var hash: UInt64 = 1469598103934665603
+        for byte in input.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1099511628211
+        }
+        return Int(truncatingIfNeeded: hash & 0x7FFF_FFFF)
     }
 }
 

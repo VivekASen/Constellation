@@ -568,7 +568,7 @@ final class TasteDiveService {
 
     func similar(
         query: String,
-        type: TasteDiveMediaType,
+        type: TasteDiveMediaType? = nil,
         limit: Int = 8
     ) async throws -> [TasteDiveResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -580,13 +580,16 @@ final class TasteDiveService {
         }
 
         var components = URLComponents(string: baseURL)
-        components?.queryItems = [
+        var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "q", value: trimmed),
             URLQueryItem(name: "k", value: apiKey),
-            URLQueryItem(name: "type", value: type.rawValue),
             URLQueryItem(name: "info", value: "1"),
             URLQueryItem(name: "limit", value: String(max(1, min(limit, 20))))
         ]
+        if let type {
+            queryItems.append(URLQueryItem(name: "type", value: type.rawValue))
+        }
+        components?.queryItems = queryItems
 
         guard let url = components?.url else {
             throw TasteDiveError.invalidURL

@@ -58,7 +58,6 @@ struct DiscoveryView: View {
 
                                 if let result = turn.result, turn.displayPreference.movieLimit > 0 {
                                     ForEach(Array(displayedMovies(from: result).prefix(turn.displayPreference.movieLimit))) { movie in
-                                        let isAdded = isMovieInLibrary(movie.id)
                                         mediaBubble(
                                             title: movie.title,
                                             subtitle: mediaSubtitle(year: movie.year, rating: movie.voteAverage),
@@ -66,21 +65,14 @@ struct DiscoveryView: View {
                                             sourceLabel: movieSourceLabel(for: movie, in: result),
                                             posterURL: movie.posterURL,
                                             emoji: "🎬",
-                                            actionTitle: isAdded ? "Added" : "Add Movie",
-                                            isAdded: isAdded,
-                                            action: {
-                                                pendingMovieForAddFeedback = movie
-                                                showingAddMovie = movieSelection(for: movie, in: result)
-                                            },
-                                            secondaryActionTitle: isAdded ? nil : "Not this",
+                                            actionTitle: nil,
+                                            action: nil,
+                                            secondaryActionTitle: "Not this",
                                             secondaryAction: {
                                                 memoryStore.markRejectedMovie(movie.id)
                                                 showToast("Noted. I’ll avoid \(movie.title)")
                                             },
-                                            onTap: {
-                                                pendingMovieForAddFeedback = movie
-                                                showingAddMovie = movieSelection(for: movie, in: result)
-                                            }
+                                            onTap: nil
                                         )
                                         .id("turn-\(turn.id.uuidString)-movie-\(movie.id)")
                                     }
@@ -88,7 +80,6 @@ struct DiscoveryView: View {
 
                                 if let result = turn.result, turn.displayPreference.tvLimit > 0 {
                                     ForEach(Array(displayedTV(from: result).prefix(turn.displayPreference.tvLimit))) { show in
-                                        let isAdded = isTVInLibrary(show.id)
                                         mediaBubble(
                                             title: show.title,
                                             subtitle: mediaSubtitle(year: show.year, rating: show.voteAverage),
@@ -96,21 +87,14 @@ struct DiscoveryView: View {
                                             sourceLabel: tvSourceLabel(for: show, in: result),
                                             posterURL: show.posterURL,
                                             emoji: "📺",
-                                            actionTitle: isAdded ? "Added" : "Add TV Show",
-                                            isAdded: isAdded,
-                                            action: {
-                                                pendingTVForAddFeedback = show
-                                                showingAddTVShow = tvSelection(for: show, in: result)
-                                            },
-                                            secondaryActionTitle: isAdded ? nil : "Not this",
+                                            actionTitle: nil,
+                                            action: nil,
+                                            secondaryActionTitle: "Not this",
                                             secondaryAction: {
                                                 memoryStore.markRejectedTV(show.id)
                                                 showToast("Noted. I’ll avoid \(show.title)")
                                             },
-                                            onTap: {
-                                                pendingTVForAddFeedback = show
-                                                showingAddTVShow = tvSelection(for: show, in: result)
-                                            }
+                                            onTap: nil
                                         )
                                         .id("turn-\(turn.id.uuidString)-tv-\(show.id)")
                                     }
