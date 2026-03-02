@@ -463,7 +463,7 @@ class DiscoveryEngine {
             let hint = parseTasteType(taste.type)
 
             if preferredMode != .tvOnly, hint != .tvOnly,
-               let movie = await resolveMovieCandidate(from: taste.name, minSimilarity: 0.76) {
+               let movie = await resolveMovieCandidate(from: taste.name, minSimilarity: 0.52) {
                 let score = blendedTasteScore(
                     title: movie.title,
                     overview: movie.overview,
@@ -484,7 +484,7 @@ class DiscoveryEngine {
             }
 
             if preferredMode != .movieOnly, hint != .movieOnly,
-               let show = await resolveTVCandidate(from: taste.name, minSimilarity: 0.76) {
+               let show = await resolveTVCandidate(from: taste.name, minSimilarity: 0.52) {
                 let score = blendedTasteScore(
                     title: show.title,
                     overview: show.overview,
@@ -631,7 +631,9 @@ class DiscoveryEngine {
         guard !left.isEmpty && !right.isEmpty else { return 0 }
         let intersection = left.intersection(right).count
         let union = left.union(right).count
-        return union == 0 ? 0 : Double(intersection) / Double(union)
+        let jaccard = union == 0 ? 0 : Double(intersection) / Double(union)
+        let containment = Double(intersection) / Double(min(left.count, right.count))
+        return max(jaccard, containment * 0.9)
     }
 
     private func dedupeScoredMoviesInOrder(_ items: [ScoredMovieRecommendation]) -> [ScoredMovieRecommendation] {
