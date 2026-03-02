@@ -56,6 +56,13 @@ class TMDBService {
         let response = try JSONDecoder().decode(TMDBSearchResponse.self, from: data)
         return response.results
     }
+
+    func getMovieKeywords(movieID: Int) async throws -> [String] {
+        let urlString = "\(baseURL)/movie/\(movieID)/keywords?api_key=\(apiKey)"
+        let data = try await fetchData(urlString: urlString, ttl: detailTTL)
+        let response = try JSONDecoder().decode(TMDBMovieKeywordsResponse.self, from: data)
+        return response.keywords.map(\.name)
+    }
     
     // MARK: - TV Shows
     
@@ -92,6 +99,13 @@ class TMDBService {
         let data = try await fetchData(urlString: urlString, ttl: searchTTL)
         let response = try JSONDecoder().decode(TMDBTVSearchResponse.self, from: data)
         return response.results
+    }
+
+    func getTVKeywords(tvID: Int) async throws -> [String] {
+        let urlString = "\(baseURL)/tv/\(tvID)/keywords?api_key=\(apiKey)"
+        let data = try await fetchData(urlString: urlString, ttl: detailTTL)
+        let response = try JSONDecoder().decode(TMDBTVKeywordsResponse.self, from: data)
+        return response.results.map(\.name)
     }
     
     // MARK: - Shared Request Helper
@@ -303,6 +317,21 @@ struct TMDBCrewMember: Codable {
 struct TMDBCreator: Codable {
     let id: Int
     let name: String
+}
+
+struct TMDBKeyword: Codable {
+    let id: Int
+    let name: String
+}
+
+struct TMDBMovieKeywordsResponse: Codable {
+    let id: Int
+    let keywords: [TMDBKeyword]
+}
+
+struct TMDBTVKeywordsResponse: Codable {
+    let id: Int
+    let results: [TMDBKeyword]
 }
 
 // MARK: - Errors
