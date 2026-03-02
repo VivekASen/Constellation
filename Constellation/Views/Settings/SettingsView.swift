@@ -17,6 +17,8 @@ struct SettingsView: View {
     @AppStorage("recommend.noveltyWeight") private var recommendationNoveltyWeight = 0.10
     @AppStorage("recommend.diversityBalance") private var recommendationDiversityBalance = 0.78
     @AppStorage("recommend.coherenceThreshold") private var recommendationCoherenceThreshold = 0.22
+    @AppStorage("recommend.enableTasteDiveBlend") private var enableTasteDiveBlend = false
+    @AppStorage("tastedive.apiKey") private var tasteDiveAPIKey = ""
     @State private var cloudStatusText = "Checking iCloud status..."
     
     var body: some View {
@@ -101,6 +103,18 @@ struct SettingsView: View {
                         recommendationDiversityBalance = 0.78
                         recommendationCoherenceThreshold = 0.22
                     }
+                }
+
+                Section("Recommendation Sources") {
+                    Toggle("Enable TasteDive Signal Blend", isOn: $enableTasteDiveBlend)
+
+                    SecureField("TasteDive API Key", text: $tasteDiveAPIKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                    Text("When enabled, recommendations blend your personal library profile with TasteDive relationship signals and TMDB ranking.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 
                 Section("Notes") {

@@ -533,6 +533,102 @@ struct TMDBTrendingItem: Codable, Identifiable {
     }
 }
 
+// MARK: - TasteDive (Optional Signal Source)
+
+final class TasteDiveService {
+    static let shared = TasteDiveService()
+
+    private let baseURL = "https://tastedive.com/api/similar"
+    private let ttl: TimeInterval = 60 * 30
+    private let cache = TMDBDataCache()
+
+    private init() {}
+
+    func similar(
+        query: String,
+        type: TasteDiveMediaType? = nil,
+        limit: Int = 8
+    ) async throws -> [TasteDiveResult] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        let apiKey = UserDefaults.standard.string(forKey: "tastedive.apiKey")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !apiKey.isEmpty else {
+            throw TasteDiveError.missingAPIKey
+        }
+
+        var components = URLComponents(string: baseURL)
+        components?.queryItems = [
+            URLQueryItem(name: "q", value: trimmed),
+            URLQueryItem(name: "k", value: apiKey),
+            URLQueryItem(name: "info", value: "1"),
+            URLQueryItem(name: "limit", value: String(max(1, min(limit, 20))))
+        ]
+        if let type {
+            components?.queryItems?.append(URLQueryItem(name: "type", value: type.rawValue))
+        }
+
+        guard let url = components?.url else {
+            throw TasteDiveError.invalidURL
+        }
+
+        let key = url.absoluteString
+        if let cached = await cache.data(for: key) {
+            let response = try JSONDecoder().decode(TasteDiveEnvelope.self, from: cached)
+            return response.similar.results
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw TasteDiveError.networkError
+        }
+
+        await cache.store(data, for: key, ttl: ttl)
+        let decoded = try JSONDecoder().decode(TasteDiveEnvelope.self, from: data)
+        return decoded.similar.results
+    }
+}
+
+enum TasteDiveMediaType: String {
+    case movies
+    case shows
+}
+
+private struct TasteDiveEnvelope: Codable {
+    let similar: TasteDiveSimilar
+
+    enum CodingKeys: String, CodingKey {
+        case similar = "Similar"
+    }
+}
+
+private struct TasteDiveSimilar: Codable {
+    let results: [TasteDiveResult]
+
+    enum CodingKeys: String, CodingKey {
+        case results = "Results"
+    }
+}
+
+struct TasteDiveResult: Codable, Identifiable {
+    let name: String
+    let type: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name = "Name"
+        case type = "Type"
+    }
+
+    var id: String { "\(type ?? "unknown")-\(name.lowercased())" }
+}
+
+enum TasteDiveError: Error {
+    case missingAPIKey
+    case invalidURL
+    case networkError
+}
+
 // MARK: - Errors
 
 enum TMDBError: Error {

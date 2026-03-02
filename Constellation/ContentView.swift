@@ -48,6 +48,8 @@ struct HomeView: View {
     @Query private var collections: [ItemCollection]
 
     
+    @AppStorage("recommend.enableTasteDiveBlend") private var enableTasteDiveBlend = false
+    @AppStorage("tastedive.apiKey") private var tasteDiveAPIKey = ""
     @State private var activeSheet: AddMediaSheet?
     @State private var homeSuggestions: [HomeSuggestion] = []
     @State private var isLoadingSuggestions = false
@@ -240,6 +242,7 @@ struct HomeView: View {
 
         let existingMovieIDs = Set(movies.compactMap(\.tmdbID))
         let existingTVIDs = Set(tvShows.compactMap(\.tmdbID))
+        let preferenceTerms = buildPreferenceTerms()
 
         var candidates: [HomeSuggestion] = []
 
@@ -259,7 +262,15 @@ struct HomeView: View {
                         subtitle: item.year.map(String.init) ?? "Movie",
                         posterURL: item.posterURL,
                         reason: "Matched by similar audience taste",
-                        mediaType: .movie
+                        mediaType: .movie,
+                        score: blendedScore(
+                            title: item.title,
+                            overview: item.overview,
+                            voteAverage: item.voteAverage,
+                            voteCount: item.voteCount,
+                            sourceBoost: 1.0,
+                            preferenceTerms: preferenceTerms
+                        )
                     )
                 )
             }
@@ -281,9 +292,126 @@ struct HomeView: View {
                         subtitle: item.year.map(String.init) ?? "TV Show",
                         posterURL: item.posterURL,
                         reason: "Matched by similar audience taste",
-                        mediaType: .tv
+                        mediaType: .tv,
+                        score: blendedScore(
+                            title: item.title,
+                            overview: item.overview,
+                            voteAverage: item.voteAverage,
+                            voteCount: item.voteCount,
+                            sourceBoost: 1.0,
+                            preferenceTerms: preferenceTerms
+                        )
                     )
                 )
+            }
+        }
+
+        if enableTasteDiveBlend && !tasteDiveAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let movieSeedTitles = movies
+                .filter { $0.watchedDate != nil || ($0.rating ?? 0) >= 4.0 }
+                .sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
+                .prefix(2)
+                .map(\.title)
+            let tvSeedTitles = tvShows
+                .filter { $0.watchedDate != nil || ($0.rating ?? 0) >= 4.0 }
+                .sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
+                .prefix(2)
+                .map(\.title)
+            let seedTitles = Array(NSOrderedSet(array: movieSeedTitles + tvSeedTitles)) as? [String] ?? []
+
+            for seedTitle in seedTitles {
+                let tasteResults = (try? await TasteDiveService.shared.similar(query: seedTitle, limit: 8)) ?? []
+                for tasteResult in tasteResults.prefix(6) {
+                    let mediaHint = parseTasteDiveMediaType(tasteResult.type)
+                    switch mediaHint {
+                    case .movie:
+                        if let movie = await bestMovieMatch(for: tasteResult.name),
+                           !existingMovieIDs.contains(movie.id) {
+                            candidates.append(
+                                HomeSuggestion(
+                                    id: "movie-\(movie.id)",
+                                    title: movie.title,
+                                    subtitle: movie.year.map(String.init) ?? "Movie",
+                                    posterURL: movie.posterURL,
+                                    reason: "Taste graph match from \(seedTitle)",
+                                    mediaType: .movie,
+                                    score: blendedScore(
+                                        title: movie.title,
+                                        overview: movie.overview,
+                                        voteAverage: movie.voteAverage,
+                                        voteCount: movie.voteCount,
+                                        sourceBoost: 1.3,
+                                        preferenceTerms: preferenceTerms
+                                    )
+                                )
+                            )
+                        }
+                    case .tv:
+                        if let show = await bestTVMatch(for: tasteResult.name),
+                           !existingTVIDs.contains(show.id) {
+                            candidates.append(
+                                HomeSuggestion(
+                                    id: "tv-\(show.id)",
+                                    title: show.title,
+                                    subtitle: show.year.map(String.init) ?? "TV Show",
+                                    posterURL: show.posterURL,
+                                    reason: "Taste graph match from \(seedTitle)",
+                                    mediaType: .tv,
+                                    score: blendedScore(
+                                        title: show.title,
+                                        overview: show.overview,
+                                        voteAverage: show.voteAverage,
+                                        voteCount: show.voteCount,
+                                        sourceBoost: 1.3,
+                                        preferenceTerms: preferenceTerms
+                                    )
+                                )
+                            )
+                        }
+                    case .unknown:
+                        if let movie = await bestMovieMatch(for: tasteResult.name),
+                           !existingMovieIDs.contains(movie.id) {
+                            candidates.append(
+                                HomeSuggestion(
+                                    id: "movie-\(movie.id)",
+                                    title: movie.title,
+                                    subtitle: movie.year.map(String.init) ?? "Movie",
+                                    posterURL: movie.posterURL,
+                                    reason: "Taste graph match from \(seedTitle)",
+                                    mediaType: .movie,
+                                    score: blendedScore(
+                                        title: movie.title,
+                                        overview: movie.overview,
+                                        voteAverage: movie.voteAverage,
+                                        voteCount: movie.voteCount,
+                                        sourceBoost: 1.25,
+                                        preferenceTerms: preferenceTerms
+                                    )
+                                )
+                            )
+                        } else if let show = await bestTVMatch(for: tasteResult.name),
+                                  !existingTVIDs.contains(show.id) {
+                            candidates.append(
+                                HomeSuggestion(
+                                    id: "tv-\(show.id)",
+                                    title: show.title,
+                                    subtitle: show.year.map(String.init) ?? "TV Show",
+                                    posterURL: show.posterURL,
+                                    reason: "Taste graph match from \(seedTitle)",
+                                    mediaType: .tv,
+                                    score: blendedScore(
+                                        title: show.title,
+                                        overview: show.overview,
+                                        voteAverage: show.voteAverage,
+                                        voteCount: show.voteCount,
+                                        sourceBoost: 1.25,
+                                        preferenceTerms: preferenceTerms
+                                    )
+                                )
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -301,7 +429,15 @@ struct HomeView: View {
                         subtitle: item.year.map(String.init) ?? item.mediaType.uppercased(),
                         posterURL: item.posterURL,
                         reason: "Trending this week",
-                        mediaType: item.mediaType == "movie" ? .movie : .tv
+                        mediaType: item.mediaType == "movie" ? .movie : .tv,
+                        score: blendedScore(
+                            title: item.resolvedTitle,
+                            overview: item.overview,
+                            voteAverage: item.voteAverage,
+                            voteCount: item.voteCount,
+                            sourceBoost: 0.8,
+                            preferenceTerms: preferenceTerms
+                        )
                     )
                 )
             }
@@ -310,8 +446,75 @@ struct HomeView: View {
         var seen = Set<String>()
         homeSuggestions = candidates
             .filter { seen.insert($0.id).inserted }
+            .sorted { $0.score > $1.score }
             .prefix(10)
             .map { $0 }
+    }
+
+    private func buildPreferenceTerms() -> Set<String> {
+        let watchedMovieTerms = movies
+            .filter { $0.watchedDate != nil || ($0.rating ?? 0) >= 4.0 }
+            .flatMap { $0.themes + $0.genres }
+        let watchedTVTerms = tvShows
+            .filter { $0.watchedDate != nil || ($0.rating ?? 0) >= 4.0 }
+            .flatMap { $0.themes + $0.genres }
+        return Set((watchedMovieTerms + watchedTVTerms).flatMap { normalizeTerm($0) })
+    }
+
+    private func normalizeTerm(_ raw: String) -> [String] {
+        raw.lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+            .split(separator: " ")
+            .map(String.init)
+            .filter { $0.count > 2 }
+    }
+
+    private func blendedScore(
+        title: String,
+        overview: String?,
+        voteAverage: Double?,
+        voteCount: Int?,
+        sourceBoost: Double,
+        preferenceTerms: Set<String>
+    ) -> Double {
+        let popularity = (voteAverage ?? 0) * 0.9 + log10(Double(max(voteCount ?? 1, 1)))
+        let text = (title + " " + (overview ?? "")).lowercased()
+        let matches = preferenceTerms.reduce(into: 0) { acc, term in
+            if text.contains(term) { acc += 1 }
+        }
+        let personal = min(Double(matches) * 0.55, 3.5)
+        return popularity + personal + sourceBoost
+    }
+
+    private func bestMovieMatch(for query: String) async -> TMDBMovie? {
+        let results = (try? await TMDBService.shared.searchMovies(query: query, page: 1)) ?? []
+        return results
+            .filter { ($0.voteCount ?? 0) >= 80 || ($0.voteAverage ?? 0) >= 7.0 }
+            .sorted { lhs, rhs in
+                let l = (lhs.voteAverage ?? 0) * log10(Double(max(lhs.voteCount ?? 1, 1)))
+                let r = (rhs.voteAverage ?? 0) * log10(Double(max(rhs.voteCount ?? 1, 1)))
+                return l > r
+            }
+            .first
+    }
+
+    private func bestTVMatch(for query: String) async -> TMDBTVShow? {
+        let results = (try? await TMDBService.shared.searchTVShows(query: query, page: 1)) ?? []
+        return results
+            .filter { ($0.voteCount ?? 0) >= 80 || ($0.voteAverage ?? 0) >= 7.0 }
+            .sorted { lhs, rhs in
+                let l = (lhs.voteAverage ?? 0) * log10(Double(max(lhs.voteCount ?? 1, 1)))
+                let r = (rhs.voteAverage ?? 0) * log10(Double(max(rhs.voteCount ?? 1, 1)))
+                return l > r
+            }
+            .first
+    }
+
+    private func parseTasteDiveMediaType(_ type: String?) -> HomeSuggestionMediaTypeHint {
+        guard let type = type?.lowercased() else { return .unknown }
+        if type.contains("movie") { return .movie }
+        if type.contains("show") || type.contains("tv") { return .tv }
+        return .unknown
     }
 }
 
@@ -527,6 +730,12 @@ private enum HomeSuggestionMediaType {
     case tv
 }
 
+private enum HomeSuggestionMediaTypeHint {
+    case movie
+    case tv
+    case unknown
+}
+
 private struct HomeSuggestion: Identifiable {
     let id: String
     let title: String
@@ -534,6 +743,7 @@ private struct HomeSuggestion: Identifiable {
     let posterURL: URL?
     let reason: String
     let mediaType: HomeSuggestionMediaType
+    let score: Double
 }
 
 private struct HomeSuggestionCard: View {
