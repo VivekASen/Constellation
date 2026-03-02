@@ -325,18 +325,49 @@ struct DiscoveryView: View {
             userTVShows: tvShows
         )
 
-        turn.result = discovery
-        let hasCards = hasRenderableResults(in: discovery, display: plan.displayPreference)
+        let uniqueDiscovery = dedupeAgainstPreviouslyShown(discovery, currentTurnIndex: turnIndex)
+        turn.result = uniqueDiscovery
+        let hasCards = hasRenderableResults(in: uniqueDiscovery, display: plan.displayPreference)
         let baseSummary = hasCards
             ? (plan.assistantLine?.isEmpty == false
                 ? plan.assistantLine
                 : intentService.fallbackAssistantSummary(plan: plan, state: conversationState))
-            : "I couldn't find good matches for that topic yet. Try adding one more anchor like era, format, or region."
+            : "I couldn't find new matches beyond what I've already shown. Try one more refinement like era, tone, language, or format."
         turn.assistantSummary = baseSummary
 
         turns[turnIndex] = turn
 
         isSearching = false
+    }
+
+    private func dedupeAgainstPreviouslyShown(_ result: DiscoveryResult, currentTurnIndex: Int) -> DiscoveryResult {
+        let priorTurns = turns.prefix(currentTurnIndex)
+        let priorResults = priorTurns.compactMap(\.result)
+
+        let seenMovieIDs = Set(priorResults.flatMap { $0.recommendations.map(\.id) })
+        let seenTVIDs = Set(priorResults.flatMap { $0.tvRecommendations.map(\.id) })
+
+        let filteredMovies = result.recommendations.filter { !seenMovieIDs.contains($0.id) }
+        let filteredTV = result.tvRecommendations.filter { !seenTVIDs.contains($0.id) }
+
+        return DiscoveryResult(
+            query: result.query,
+            understanding: result.understanding,
+            inLibraryMovies: result.inLibraryMovies,
+            inLibraryTVShows: result.inLibraryTVShows,
+            recommendations: filteredMovies,
+            tvRecommendations: filteredTV,
+            movieRecommendationReasons: result.movieRecommendationReasons.filter { !seenMovieIDs.contains($0.key) },
+            tvRecommendationReasons: result.tvRecommendationReasons.filter { !seenTVIDs.contains($0.key) },
+            movieRecommendationCoherence: result.movieRecommendationCoherence.filter { !seenMovieIDs.contains($0.key) },
+            tvRecommendationCoherence: result.tvRecommendationCoherence.filter { !seenTVIDs.contains($0.key) },
+            movieRecommendationSemantic: result.movieRecommendationSemantic.filter { !seenMovieIDs.contains($0.key) },
+            tvRecommendationSemantic: result.tvRecommendationSemantic.filter { !seenTVIDs.contains($0.key) },
+            movieRecommendationScore: result.movieRecommendationScore.filter { !seenMovieIDs.contains($0.key) },
+            tvRecommendationScore: result.tvRecommendationScore.filter { !seenTVIDs.contains($0.key) },
+            followUpQuestions: result.followUpQuestions,
+            connections: result.connections
+        )
     }
 
     private func hasRenderableResults(in result: DiscoveryResult, display: ChatDisplayPreference) -> Bool {
