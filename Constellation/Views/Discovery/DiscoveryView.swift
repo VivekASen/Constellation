@@ -107,6 +107,11 @@ struct DiscoveryView: View {
                                     }
                                 }
 
+                                if let result = turn.result,
+                                   let highlight = watchlistHighlight(from: result, display: turn.displayPreference) {
+                                    watchlistHighlightCard(highlight)
+                                }
+
                             }
 
                             if isSearching {
@@ -349,6 +354,61 @@ struct DiscoveryView: View {
         return "Related in your watchlist: \(preview)."
     }
 
+    private func watchlistHighlight(from result: DiscoveryResult, display: ChatDisplayPreference) -> WatchlistHighlight? {
+        let movieCandidates = result.inLibraryMovies.filter { $0.watchedDate == nil }
+        let tvCandidates = result.inLibraryTVShows.filter { $0.watchedDate == nil }
+
+        if display.movieLimit == 0 {
+            if let show = tvCandidates.first { return .tv(show) }
+            if let movie = movieCandidates.first { return .movie(movie) }
+            return nil
+        }
+
+        if display.tvLimit == 0 {
+            if let movie = movieCandidates.first { return .movie(movie) }
+            if let show = tvCandidates.first { return .tv(show) }
+            return nil
+        }
+
+        if let movie = movieCandidates.first { return .movie(movie) }
+        if let show = tvCandidates.first { return .tv(show) }
+        return nil
+    }
+
+    @ViewBuilder
+    private func watchlistHighlightCard(_ highlight: WatchlistHighlight) -> some View {
+        switch highlight {
+        case .movie(let movie):
+            mediaBubble(
+                title: movie.title,
+                subtitle: mediaSubtitle(year: movie.year, rating: movie.rating),
+                reason: "Already on your watchlist and related to this topic",
+                posterURL: URL(string: movie.posterURL ?? ""),
+                emoji: "🎬",
+                actionTitle: "On your list",
+                isAdded: true,
+                action: nil,
+                secondaryActionTitle: nil,
+                secondaryAction: nil,
+                onTap: nil
+            )
+        case .tv(let show):
+            mediaBubble(
+                title: show.title,
+                subtitle: mediaSubtitle(year: show.year, rating: show.rating),
+                reason: "Already on your watchlist and related to this topic",
+                posterURL: URL(string: show.posterURL ?? ""),
+                emoji: "📺",
+                actionTitle: "On your list",
+                isAdded: true,
+                action: nil,
+                secondaryActionTitle: nil,
+                secondaryAction: nil,
+                onTap: nil
+            )
+        }
+    }
+
     private func movieSelection(for movie: TMDBMovie, in result: DiscoveryResult) -> DiscoveryMovieSelection {
         DiscoveryMovieSelection(
             movie: movie,
@@ -582,6 +642,11 @@ private struct DiscoveryTVSelection: Identifiable {
     let show: TMDBTVShow
     let context: TVRecommendationContext
     var id: Int { show.id }
+}
+
+private enum WatchlistHighlight {
+    case movie(Movie)
+    case tv(TVShow)
 }
 
 #Preview {

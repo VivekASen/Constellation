@@ -27,13 +27,72 @@ class DiscoveryEngine {
         
         let movieMatches = findIntelligentMovieMatches(understanding: understanding, in: userMovies)
         let tvMatches = findIntelligentTVMatches(understanding: understanding, in: userTVShows)
+
+        let movieLibraryIDs = Set(userMovies.compactMap(\.tmdbID))
+        let tvLibraryIDs = Set(userTVShows.compactMap(\.tmdbID))
+
+        var movieRecommendations = recommendationResult.movies.map(\.movie)
+        var tvRecommendations = recommendationResult.tvShows.map(\.show)
+        var movieReasons = Dictionary(
+            uniqueKeysWithValues: recommendationResult.movies.map { ($0.movie.id, $0.reasons.joined(separator: " • ")) }
+        )
+        var tvReasons = Dictionary(
+            uniqueKeysWithValues: recommendationResult.tvShows.map { ($0.show.id, $0.reasons.joined(separator: " • ")) }
+        )
+        var movieCoherence = Dictionary(
+            uniqueKeysWithValues: recommendationResult.movies.map { ($0.movie.id, $0.coherenceEvidence) }
+        )
+        var tvCoherence = Dictionary(
+            uniqueKeysWithValues: recommendationResult.tvShows.map { ($0.show.id, $0.coherenceEvidence) }
+        )
+        var movieSemantic = Dictionary(
+            uniqueKeysWithValues: recommendationResult.movies.map { ($0.movie.id, $0.semanticEvidence) }
+        )
+        var tvSemantic = Dictionary(
+            uniqueKeysWithValues: recommendationResult.tvShows.map { ($0.show.id, $0.semanticEvidence) }
+        )
+        var movieScore = Dictionary(
+            uniqueKeysWithValues: recommendationResult.movies.map { ($0.movie.id, $0.score) }
+        )
+        var tvScore = Dictionary(
+            uniqueKeysWithValues: recommendationResult.tvShows.map { ($0.show.id, $0.score) }
+        )
+
+        if movieRecommendations.count + tvRecommendations.count < 2 {
+            if let popularMovies = try? await TMDBService.shared.getPopularMovies() {
+                for movie in popularMovies {
+                    guard movieRecommendations.count + tvRecommendations.count < 2 else { break }
+                    guard !movieLibraryIDs.contains(movie.id) else { continue }
+                    guard !movieRecommendations.contains(where: { $0.id == movie.id }) else { continue }
+                    movieRecommendations.append(movie)
+                    movieReasons[movie.id] = "Popular recommendation related to your search"
+                    movieCoherence[movie.id] = 0.20
+                    movieSemantic[movie.id] = 0.12
+                    movieScore[movie.id] = 0.28
+                }
+            }
+
+            if movieRecommendations.count + tvRecommendations.count < 2,
+               let popularTV = try? await TMDBService.shared.getPopularTVShows() {
+                for show in popularTV {
+                    guard movieRecommendations.count + tvRecommendations.count < 2 else { break }
+                    guard !tvLibraryIDs.contains(show.id) else { continue }
+                    guard !tvRecommendations.contains(where: { $0.id == show.id }) else { continue }
+                    tvRecommendations.append(show)
+                    tvReasons[show.id] = "Popular recommendation related to your search"
+                    tvCoherence[show.id] = 0.20
+                    tvSemantic[show.id] = 0.12
+                    tvScore[show.id] = 0.28
+                }
+            }
+        }
         
         let questions = generateFollowUpQuestions(
             understanding: understanding,
             movieMatches: movieMatches,
             tvMatches: tvMatches,
-            movieRecommendations: recommendationResult.movies.map(\.movie),
-            tvRecommendations: recommendationResult.tvShows.map(\.show)
+            movieRecommendations: movieRecommendations,
+            tvRecommendations: tvRecommendations
         )
         
         return DiscoveryResult(
@@ -41,32 +100,16 @@ class DiscoveryEngine {
             understanding: understanding,
             inLibraryMovies: movieMatches,
             inLibraryTVShows: tvMatches,
-            recommendations: recommendationResult.movies.map(\.movie),
-            tvRecommendations: recommendationResult.tvShows.map(\.show),
-            movieRecommendationReasons: Dictionary(
-                uniqueKeysWithValues: recommendationResult.movies.map { ($0.movie.id, $0.reasons.joined(separator: " • ")) }
-            ),
-            tvRecommendationReasons: Dictionary(
-                uniqueKeysWithValues: recommendationResult.tvShows.map { ($0.show.id, $0.reasons.joined(separator: " • ")) }
-            ),
-            movieRecommendationCoherence: Dictionary(
-                uniqueKeysWithValues: recommendationResult.movies.map { ($0.movie.id, $0.coherenceEvidence) }
-            ),
-            tvRecommendationCoherence: Dictionary(
-                uniqueKeysWithValues: recommendationResult.tvShows.map { ($0.show.id, $0.coherenceEvidence) }
-            ),
-            movieRecommendationSemantic: Dictionary(
-                uniqueKeysWithValues: recommendationResult.movies.map { ($0.movie.id, $0.semanticEvidence) }
-            ),
-            tvRecommendationSemantic: Dictionary(
-                uniqueKeysWithValues: recommendationResult.tvShows.map { ($0.show.id, $0.semanticEvidence) }
-            ),
-            movieRecommendationScore: Dictionary(
-                uniqueKeysWithValues: recommendationResult.movies.map { ($0.movie.id, $0.score) }
-            ),
-            tvRecommendationScore: Dictionary(
-                uniqueKeysWithValues: recommendationResult.tvShows.map { ($0.show.id, $0.score) }
-            ),
+            recommendations: movieRecommendations,
+            tvRecommendations: tvRecommendations,
+            movieRecommendationReasons: movieReasons,
+            tvRecommendationReasons: tvReasons,
+            movieRecommendationCoherence: movieCoherence,
+            tvRecommendationCoherence: tvCoherence,
+            movieRecommendationSemantic: movieSemantic,
+            tvRecommendationSemantic: tvSemantic,
+            movieRecommendationScore: movieScore,
+            tvRecommendationScore: tvScore,
             followUpQuestions: questions,
             connections: findConnections(inMovies: movieMatches, tvShows: tvMatches)
         )
