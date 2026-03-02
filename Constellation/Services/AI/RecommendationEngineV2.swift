@@ -43,7 +43,9 @@ final class RecommendationEngineV2 {
     private let topicStopTokens: Set<String> = [
         "movie", "movies", "film", "films", "tv", "show", "shows", "series",
         "best", "good", "great", "strong", "suggest", "suggestion", "suggestions",
-        "about", "with", "for", "and", "the", "a", "an", "more"
+        "about", "with", "for", "and", "the", "a", "an", "more",
+        "physical", "social", "cultural", "political", "historical", "modern",
+        "process", "study", "general", "practice", "field", "theory"
     ]
     private init() {}
     
@@ -812,22 +814,24 @@ final class RecommendationEngineV2 {
             .first ?? sanitizeQueryForSearch(query)
         let normalizedQuery = normalize(focused)
         var phrases: Set<String> = []
-        var tokens: Set<String> = []
+        var coreTokens: Set<String> = []
+        var expandedTokens: Set<String> = []
         let expandedNormalized = expandedTerms.map(normalize)
         phrases.formUnion(expandedNormalized.filter { $0.split(separator: " ").count > 1 })
 
         let understandingTokens = tokenize((understanding.themes + understanding.genres).joined(separator: " "))
         let queryTokens = tokenize(normalizedQuery).filter { !topicStopTokens.contains($0) }
-        let expandedTokens = Set(expandedNormalized.flatMap { tokenize($0) }.filter { !topicStopTokens.contains($0) })
+        let expandedTermTokens = Set(expandedNormalized.flatMap { tokenize($0) }.filter { !topicStopTokens.contains($0) })
 
-        tokens.formUnion(understandingTokens.filter { !topicStopTokens.contains($0) })
-        tokens.formUnion(queryTokens)
-        tokens.formUnion(expandedTokens)
+        coreTokens.formUnion(understandingTokens.filter { !topicStopTokens.contains($0) })
+        coreTokens.formUnion(queryTokens)
+        expandedTokens.formUnion(expandedTermTokens.subtracting(coreTokens))
 
-        let seedQueries = Array(phrases.prefix(6)) + tokens.map { $0.capitalized }
+        let seedQueries = Array(phrases.prefix(6)) + Array(coreTokens.prefix(8)).map { $0.capitalized }
         return TopicConstraint(
             requiredPhrases: Array(phrases),
-            requiredTokens: tokens,
+            coreTokens: coreTokens,
+            expandedTokens: expandedTokens,
             seedQueries: seedQueries
         )
     }
@@ -919,11 +923,12 @@ private enum RecommendationMediaMode {
 
 private struct TopicConstraint {
     let requiredPhrases: [String]
-    let requiredTokens: Set<String>
+    let coreTokens: Set<String>
+    let expandedTokens: Set<String>
     let seedQueries: [String]
 
     var isActive: Bool {
-        !requiredPhrases.isEmpty || !requiredTokens.isEmpty
+        !requiredPhrases.isEmpty || !coreTokens.isEmpty || !expandedTokens.isEmpty
     }
 
     func matches(normalizedText: String, tokens: Set<String>) -> Bool {
@@ -934,15 +939,22 @@ private struct TopicConstraint {
         }
         if phraseHit { return true }
 
-        let tokenHits = tokens.intersection(requiredTokens).count
-        return tokenHits >= 1
+        let coreHits = tokens.intersection(coreTokens).count
+        if coreHits >= 1 { return true }
+
+        // Expanded terms are weaker evidence: require stronger overlap.
+        let expandedHits = tokens.intersection(expandedTokens).count
+        return expandedHits >= 2
     }
 
     func relaxedMatches(normalizedText: String, tokens: Set<String>) -> Bool {
         guard isActive else { return true }
         let phraseHit = requiredPhrases.contains { normalizedText.contains($0) }
         if phraseHit { return true }
-        return tokens.intersection(requiredTokens).count > 0
+        if tokens.intersection(coreTokens).count > 0 {
+            return true
+        }
+        return tokens.intersection(expandedTokens).count >= 1
     }
 }
 
