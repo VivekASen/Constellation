@@ -11,7 +11,7 @@ import Foundation
 class TMDBService {
     static let shared = TMDBService()
     
-    private let apiKey = "REDACTED_TMDB_KEY"
+    private var apiKey: String { APIKeyStore.tmdb }
     private let baseURL = "https://api.themoviedb.org/3"
     private let cache = TMDBDataCache()
     private let searchTTL: TimeInterval = 60 * 12
@@ -214,6 +214,28 @@ class TMDBService {
         
         await cache.store(data, for: urlString, ttl: ttl)
         return data
+    }
+}
+
+private enum APIKeyStore {
+    private static var apiKeys: [String: String] {
+        Bundle.main.object(forInfoDictionaryKey: "APIKeys") as? [String: String] ?? [:]
+    }
+
+    static var tmdb: String {
+        apiKeys["TMDB"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    static var tasteDive: String {
+        apiKeys["TasteDive"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    static var podcast: String {
+        apiKeys["Podcast"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    static var books: String {
+        apiKeys["Books"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 }
 
@@ -552,8 +574,7 @@ final class TasteDiveService {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
-        let apiKey = UserDefaults.standard.string(forKey: "tastedive.apiKey")?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let apiKey = APIKeyStore.tasteDive
         guard !apiKey.isEmpty else {
             throw TasteDiveError.missingAPIKey
         }

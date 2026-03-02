@@ -49,7 +49,6 @@ struct HomeView: View {
 
     
     @AppStorage("recommend.enableTasteDiveBlend") private var enableTasteDiveBlend = false
-    @AppStorage("tastedive.apiKey") private var tasteDiveAPIKey = ""
     @State private var activeSheet: AddMediaSheet?
     @State private var homeSuggestions: [HomeSuggestion] = []
     @State private var isLoadingSuggestions = false
@@ -306,7 +305,7 @@ struct HomeView: View {
             }
         }
 
-        if enableTasteDiveBlend && !tasteDiveAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if enableTasteDiveBlend {
             let movieSeedTitles = movies
                 .filter { $0.watchedDate != nil || ($0.rating ?? 0) >= 4.0 }
                 .sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }

@@ -2,6 +2,17 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>APIKeys</key>
+	<dict>
+		<key>Books</key>
+		<string></string>
+		<key>Podcast</key>
+		<string></string>
+		<key>TasteDive</key>
+		<string>1069659-Constell-844F0A1E</string>
+		<key>TMDB</key>
+		<string>REDACTED_TMDB_KEY</string>
+	</dict>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
