@@ -228,11 +228,11 @@ final class ChatIntentService {
         let display: ChatDisplayPreference
         switch effectiveMode {
         case .movieOnly:
-            display = ChatDisplayPreference(movieLimit: wantsMore ? 4 : 2, tvLimit: 0)
+            display = ChatDisplayPreference(movieLimit: wantsMore ? 6 : 4, tvLimit: 0)
         case .tvOnly:
-            display = ChatDisplayPreference(movieLimit: 0, tvLimit: wantsMore ? 4 : 2)
+            display = ChatDisplayPreference(movieLimit: 0, tvLimit: wantsMore ? 6 : 4)
         case .any:
-            display = wantsMore ? ChatDisplayPreference(movieLimit: 2, tvLimit: 2) : ChatDisplayPreference(movieLimit: 1, tvLimit: 1)
+            display = wantsMore ? ChatDisplayPreference(movieLimit: 3, tvLimit: 3) : ChatDisplayPreference(movieLimit: 2, tvLimit: 2)
         }
 
         return ChatTurnPlan(
@@ -298,12 +298,12 @@ final class ChatIntentService {
         if movieLimit == 0 && tvLimit == 0 {
             switch parsed.mediaModeOverride ?? state.mediaMode {
             case .movieOnly:
-                movieLimit = parsed.wantsMore ? 4 : 2
+                movieLimit = parsed.wantsMore ? 6 : 4
             case .tvOnly:
-                tvLimit = parsed.wantsMore ? 4 : 2
+                tvLimit = parsed.wantsMore ? 6 : 4
             case .any:
-                movieLimit = parsed.wantsMore ? 2 : 1
-                tvLimit = parsed.wantsMore ? 2 : 1
+                movieLimit = parsed.wantsMore ? 3 : 2
+                tvLimit = parsed.wantsMore ? 3 : 2
             }
         }
 
@@ -475,14 +475,14 @@ final class ChatIntentService {
         switch effectiveMode {
         case .tvOnly:
             movieLimit = 0
-            tvLimit = max(tvLimit, wantsMore ? 4 : 2)
+            tvLimit = max(tvLimit, wantsMore ? 6 : 4)
         case .movieOnly:
             tvLimit = 0
-            movieLimit = max(movieLimit, wantsMore ? 4 : 2)
+            movieLimit = max(movieLimit, wantsMore ? 6 : 4)
         case .any:
             if movieLimit == 0 && tvLimit == 0 {
-                movieLimit = wantsMore ? 2 : 1
-                tvLimit = wantsMore ? 2 : 1
+                movieLimit = wantsMore ? 3 : 2
+                tvLimit = wantsMore ? 3 : 2
             }
         }
 

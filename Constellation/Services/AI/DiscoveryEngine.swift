@@ -12,6 +12,7 @@ class DiscoveryEngine {
     static let shared = DiscoveryEngine()
     private let recommendationEngine = RecommendationEngineV2.shared
     private let deterministicUnderstanding = DeterministicQueryUnderstandingEngine.shared
+    private let minimumSuggestionCount = 4
     
     private init() {}
     
@@ -85,9 +86,9 @@ class DiscoveryEngine {
 
         switch preferredMode {
         case .movieOnly:
-            if movieRecommendations.count < 2, let popularMovies = try? await TMDBService.shared.getPopularMovies() {
+            if movieRecommendations.count < minimumSuggestionCount, let popularMovies = try? await TMDBService.shared.getPopularMovies() {
                 for movie in popularMovies {
-                    guard movieRecommendations.count < 2 else { break }
+                    guard movieRecommendations.count < minimumSuggestionCount else { break }
                     guard !movieLibraryIDs.contains(movie.id) else { continue }
                     guard !excludedMovieIDs.contains(movie.id) else { continue }
                     guard !movieRecommendations.contains(where: { $0.id == movie.id }) else { continue }
@@ -99,9 +100,9 @@ class DiscoveryEngine {
                 }
             }
         case .tvOnly:
-            if tvRecommendations.count < 2, let popularTV = try? await TMDBService.shared.getPopularTVShows() {
+            if tvRecommendations.count < minimumSuggestionCount, let popularTV = try? await TMDBService.shared.getPopularTVShows() {
                 for show in popularTV {
-                    guard tvRecommendations.count < 2 else { break }
+                    guard tvRecommendations.count < minimumSuggestionCount else { break }
                     guard !tvLibraryIDs.contains(show.id) else { continue }
                     guard !excludedTVIDs.contains(show.id) else { continue }
                     guard !tvRecommendations.contains(where: { $0.id == show.id }) else { continue }
@@ -113,10 +114,10 @@ class DiscoveryEngine {
                 }
             }
         case .any:
-            if movieRecommendations.count + tvRecommendations.count < 2 {
+            if movieRecommendations.count + tvRecommendations.count < minimumSuggestionCount {
                 if let popularMovies = try? await TMDBService.shared.getPopularMovies() {
                     for movie in popularMovies {
-                        guard movieRecommendations.count + tvRecommendations.count < 2 else { break }
+                        guard movieRecommendations.count + tvRecommendations.count < minimumSuggestionCount else { break }
                         guard !movieLibraryIDs.contains(movie.id) else { continue }
                         guard !excludedMovieIDs.contains(movie.id) else { continue }
                         guard !movieRecommendations.contains(where: { $0.id == movie.id }) else { continue }
@@ -128,10 +129,10 @@ class DiscoveryEngine {
                     }
                 }
 
-                if movieRecommendations.count + tvRecommendations.count < 2,
+                if movieRecommendations.count + tvRecommendations.count < minimumSuggestionCount,
                    let popularTV = try? await TMDBService.shared.getPopularTVShows() {
                     for show in popularTV {
-                        guard movieRecommendations.count + tvRecommendations.count < 2 else { break }
+                        guard movieRecommendations.count + tvRecommendations.count < minimumSuggestionCount else { break }
                         guard !tvLibraryIDs.contains(show.id) else { continue }
                         guard !excludedTVIDs.contains(show.id) else { continue }
                         guard !tvRecommendations.contains(where: { $0.id == show.id }) else { continue }
