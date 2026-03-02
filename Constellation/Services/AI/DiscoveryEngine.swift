@@ -348,26 +348,6 @@ class DiscoveryEngine {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
-    private func fallbackUnderstanding(for query: String) -> QueryUnderstanding {
-        let normalized = normalizeForCompare(query)
-        let themes = ThemeExtractor.shared.normalizeThemes([normalized])
-        
-        let genres = [
-            "action", "adventure", "fantasy", "drama", "thriller", "horror",
-            "comedy", "romance", "science fiction", "documentary", "mystery", "crime"
-        ]
-            .filter { normalized.contains($0) }
-            .sorted()
-        
-        return QueryUnderstanding(
-            themes: themes,
-            genres: genres,
-            mood: normalized,
-            isGenre: !genres.isEmpty,
-            suggestions: []
-        )
-    }
-    
     private func enrichUnderstanding(_ understanding: QueryUnderstanding, for query: String) -> QueryUnderstanding {
         let cleanSuggestions = understanding.suggestions
             .map(normalizeForCompare)
