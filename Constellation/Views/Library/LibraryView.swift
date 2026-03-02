@@ -18,6 +18,7 @@ struct LibraryView: View {
             List {
                 modePickerSection
                 mediaFilterSection
+                statsSection
 
                 if mode == .watched, !favoriteItems.isEmpty {
                     Section("Favorites") {
@@ -136,6 +137,34 @@ struct LibraryView: View {
         }
     }
 
+    private var statsSection: some View {
+        Section {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    metricCard(
+                        title: "Watchlist",
+                        value: "\(watchlistItems.count)",
+                        subtitle: "Items to watch",
+                        tint: .blue
+                    )
+                    metricCard(
+                        title: "Watched",
+                        value: "\(watchedItems.count)",
+                        subtitle: "Completed",
+                        tint: .green
+                    )
+                    metricCard(
+                        title: "Top Rated",
+                        value: topRatedValue,
+                        subtitle: topRatedSubtitle,
+                        tint: .yellow
+                    )
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
     private var watchlistItems: [LibraryItem] {
         let movieItems = movies.filter { $0.watchedDate == nil }.map(LibraryItem.movie)
         let showItems = tvShows.filter { $0.watchedDate == nil }.map(LibraryItem.tvShow)
@@ -196,36 +225,41 @@ struct LibraryView: View {
             }
         }()
 
-        NavigationLink(destination: destination) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Text(item.title)
-                        .font(.headline)
-                        .lineLimit(1)
-                    Text(item.isMovie ? "Movie" : "TV")
-                        .font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(item.isMovie ? Color.blue.opacity(0.12) : Color.green.opacity(0.12))
-                        .foregroundStyle(item.isMovie ? .blue : .green)
-                        .clipShape(Capsule())
+        HStack(spacing: 10) {
+            NavigationLink(destination: destination) {
+                rowContent(item)
+            }
+            .buttonStyle(.plain)
+
+            if mode == .watched {
+                ratingMenu(for: item)
+            }
+        }
+        .contentShape(Rectangle())
+        .contextMenu {
+            if mode == .watchlist {
+                Button {
+                    watchedDate = Date()
+                    watchedRating = 0
+                    markWatchedTarget = item
+                } label: {
+                    Label("Mark as Watched", systemImage: "checkmark.circle")
                 }
-                HStack(spacing: 10) {
-                    if let year = item.year {
-                        Text(String(year))
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+            } else {
+                Menu("Set Rating") {
+                    ForEach(1...5, id: \.self) { star in
+                        Button("\(star) Star\(star == 1 ? "" : "s")") {
+                            setRating(item: item, rating: Double(star))
+                        }
                     }
-                    if let rating = item.rating {
-                        Text("★ \(String(format: "%.1f", rating))")
-                            .font(.subheadline)
-                            .foregroundStyle(.yellow)
+                    Button("Clear Rating") {
+                        setRating(item: item, rating: nil)
                     }
-                    if let watchedDate = item.watchedDate {
-                        Text(watchedDate.formatted(date: .abbreviated, time: .omitted))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                }
+                Button {
+                    markAsWatchlist(item: item)
+                } label: {
+                    Label("Move to Watchlist", systemImage: "bookmark")
                 }
             }
         }
@@ -244,6 +278,95 @@ struct LibraryView: View {
                 .tint(.orange)
             }
         }
+    }
+
+    @ViewBuilder
+    private func rowContent(_ item: LibraryItem) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(item.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(item.isMovie ? "Movie" : "TV")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(item.isMovie ? Color.blue.opacity(0.12) : Color.green.opacity(0.12))
+                    .foregroundStyle(item.isMovie ? .blue : .green)
+                    .clipShape(Capsule())
+            }
+            HStack(spacing: 10) {
+                if let year = item.year {
+                    Text(String(year))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                if let rating = item.rating {
+                    Text("★ \(String(format: "%.1f", rating))")
+                        .font(.subheadline)
+                        .foregroundStyle(.yellow)
+                }
+                if let watchedDate = item.watchedDate {
+                    Text(watchedDate.formatted(date: .abbreviated, time: .omitted))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ratingMenu(for item: LibraryItem) -> some View {
+        Menu {
+            ForEach(1...5, id: \.self) { star in
+                Button("\(star) Star\(star == 1 ? "" : "s")") {
+                    setRating(item: item, rating: Double(star))
+                }
+            }
+            Button("Clear Rating") {
+                setRating(item: item, rating: nil)
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                Image(systemName: "star.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.yellow)
+                Text(item.rating.map { String(format: "%.1f", $0) } ?? "Rate")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(minWidth: 42)
+        }
+    }
+
+    private func metricCard(title: String, value: String, subtitle: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.headline)
+                .foregroundStyle(.primary)
+            Text(subtitle)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(width: 130, alignment: .leading)
+        .padding(10)
+        .background(tint.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var topRatedValue: String {
+        guard let top = watchedItems.first(where: { $0.rating != nil }),
+              let rating = top.rating else { return "—" }
+        return String(format: "%.1f ★", rating)
+    }
+
+    private var topRatedSubtitle: String {
+        guard let top = watchedItems.first(where: { $0.rating != nil }) else { return "No ratings yet" }
+        return top.title
     }
 
     private func applyWatched(target: LibraryItem) {
@@ -266,6 +389,16 @@ struct LibraryView: View {
         case .tvShow(let show):
             show.watchedDate = nil
             show.rating = nil
+        }
+        try? modelContext.save()
+    }
+
+    private func setRating(item: LibraryItem, rating: Double?) {
+        switch item {
+        case .movie(let movie):
+            movie.rating = rating
+        case .tvShow(let show):
+            show.rating = rating
         }
         try? modelContext.save()
     }
