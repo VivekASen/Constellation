@@ -17,6 +17,7 @@ class DiscoveryEngine {
     
     func discover(interest: String, userMovies: [Movie], userTVShows: [TVShow]) async -> DiscoveryResult {
         let understanding = await understandQuery(interest)
+        let preferredMode = preferredMediaMode(from: interest)
         
         let recommendationResult = await recommendationEngine.recommend(
             query: interest,
@@ -58,10 +59,11 @@ class DiscoveryEngine {
             uniqueKeysWithValues: recommendationResult.tvShows.map { ($0.show.id, $0.score) }
         )
 
-        if movieRecommendations.count + tvRecommendations.count < 2 {
-            if let popularMovies = try? await TMDBService.shared.getPopularMovies() {
+        switch preferredMode {
+        case .movieOnly:
+            if movieRecommendations.count < 2, let popularMovies = try? await TMDBService.shared.getPopularMovies() {
                 for movie in popularMovies {
-                    guard movieRecommendations.count + tvRecommendations.count < 2 else { break }
+                    guard movieRecommendations.count < 2 else { break }
                     guard !movieLibraryIDs.contains(movie.id) else { continue }
                     guard !movieRecommendations.contains(where: { $0.id == movie.id }) else { continue }
                     movieRecommendations.append(movie)
@@ -71,11 +73,10 @@ class DiscoveryEngine {
                     movieScore[movie.id] = 0.28
                 }
             }
-
-            if movieRecommendations.count + tvRecommendations.count < 2,
-               let popularTV = try? await TMDBService.shared.getPopularTVShows() {
+        case .tvOnly:
+            if tvRecommendations.count < 2, let popularTV = try? await TMDBService.shared.getPopularTVShows() {
                 for show in popularTV {
-                    guard movieRecommendations.count + tvRecommendations.count < 2 else { break }
+                    guard tvRecommendations.count < 2 else { break }
                     guard !tvLibraryIDs.contains(show.id) else { continue }
                     guard !tvRecommendations.contains(where: { $0.id == show.id }) else { continue }
                     tvRecommendations.append(show)
@@ -83,6 +84,35 @@ class DiscoveryEngine {
                     tvCoherence[show.id] = 0.20
                     tvSemantic[show.id] = 0.12
                     tvScore[show.id] = 0.28
+                }
+            }
+        case .any:
+            if movieRecommendations.count + tvRecommendations.count < 2 {
+                if let popularMovies = try? await TMDBService.shared.getPopularMovies() {
+                    for movie in popularMovies {
+                        guard movieRecommendations.count + tvRecommendations.count < 2 else { break }
+                        guard !movieLibraryIDs.contains(movie.id) else { continue }
+                        guard !movieRecommendations.contains(where: { $0.id == movie.id }) else { continue }
+                        movieRecommendations.append(movie)
+                        movieReasons[movie.id] = "Popular recommendation related to your search"
+                        movieCoherence[movie.id] = 0.20
+                        movieSemantic[movie.id] = 0.12
+                        movieScore[movie.id] = 0.28
+                    }
+                }
+
+                if movieRecommendations.count + tvRecommendations.count < 2,
+                   let popularTV = try? await TMDBService.shared.getPopularTVShows() {
+                    for show in popularTV {
+                        guard movieRecommendations.count + tvRecommendations.count < 2 else { break }
+                        guard !tvLibraryIDs.contains(show.id) else { continue }
+                        guard !tvRecommendations.contains(where: { $0.id == show.id }) else { continue }
+                        tvRecommendations.append(show)
+                        tvReasons[show.id] = "Popular recommendation related to your search"
+                        tvCoherence[show.id] = 0.20
+                        tvSemantic[show.id] = 0.12
+                        tvScore[show.id] = 0.28
+                    }
                 }
             }
         }
@@ -334,6 +364,29 @@ class DiscoveryEngine {
             isGenre: understanding.isGenre,
             suggestions: suggestions
         )
+    }
+}
+
+private enum PreferredDiscoveryMediaMode {
+    case any
+    case movieOnly
+    case tvOnly
+}
+
+private extension DiscoveryEngine {
+    func preferredMediaMode(from interest: String) -> PreferredDiscoveryMediaMode {
+        let value = interest.lowercased()
+        let hasMovieOnly = value.contains("movie only")
+            || value.contains("movies only")
+            || value.contains("films only")
+        let hasTVOnly = value.contains("tv only")
+            || value.contains("tv shows only")
+            || value.contains("show only")
+            || value.contains("series only")
+
+        if hasMovieOnly && !hasTVOnly { return .movieOnly }
+        if hasTVOnly && !hasMovieOnly { return .tvOnly }
+        return .any
     }
 }
 
