@@ -6,6 +6,8 @@
 //
 
 import SwiftUI
+import AuthenticationServices
+import CloudKit
 
 struct SettingsView: View {
     @AppStorage("theme.semanticMatchThreshold") private var semanticThreshold = 0.79
@@ -15,10 +17,35 @@ struct SettingsView: View {
     @AppStorage("recommend.noveltyWeight") private var recommendationNoveltyWeight = 0.10
     @AppStorage("recommend.diversityBalance") private var recommendationDiversityBalance = 0.78
     @AppStorage("recommend.coherenceThreshold") private var recommendationCoherenceThreshold = 0.22
+    @State private var cloudStatusText = "Checking iCloud status..."
     
     var body: some View {
         NavigationStack {
             Form {
+                Section("Account & Sync") {
+                    SignInWithAppleButton(.signIn, onRequest: { request in
+                        request.requestedScopes = [.fullName, .email]
+                    }, onCompletion: { _ in })
+                    .signInWithAppleButtonStyle(.black)
+                    .frame(height: 44)
+
+                    HStack {
+                        Text("Cloud Sync")
+                        Spacer()
+                        Text(cloudStatusText)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                    }
+
+                    Button("Refresh Sync Status") {
+                        Task { await refreshCloudAccountStatus() }
+                    }
+
+                    Text("Sync uses CloudKit private database in your iCloud account. Your app data is not used for tracking.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Theme Matching") {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
@@ -83,6 +110,9 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .task {
+                await refreshCloudAccountStatus()
+            }
         }
     }
     
@@ -94,6 +124,30 @@ struct SettingsView: View {
             Text(String(format: "%.2f", value))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
+        }
+    }
+
+    private func refreshCloudAccountStatus() async {
+        let status = await withCheckedContinuation { continuation in
+            CKContainer.default().accountStatus { status, _ in
+                continuation.resume(returning: status)
+            }
+        }
+        await MainActor.run {
+            switch status {
+            case .available:
+                cloudStatusText = "Connected"
+            case .noAccount:
+                cloudStatusText = "No iCloud account"
+            case .restricted:
+                cloudStatusText = "Restricted"
+            case .couldNotDetermine:
+                cloudStatusText = "Unavailable"
+            case .temporarilyUnavailable:
+                cloudStatusText = "Temporarily unavailable"
+            @unknown default:
+                cloudStatusText = "Unknown"
+            }
         }
     }
 }
