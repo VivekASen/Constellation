@@ -5,11 +5,18 @@ import Foundation
 final class TopicKnowledgeService {
     static let shared = TopicKnowledgeService()
     private init() {}
+    private let awardsCache = AwardsSignalCache()
 
     private let stopTokens: Set<String> = [
         "the", "and", "with", "from", "about", "into", "over", "under", "your", "show", "movie",
         "movies", "tv", "series", "suggest", "suggestions", "more", "like", "that", "this", "for",
         "what", "when", "where", "which", "only", "watch", "watched"
+    ]
+    private let awardTerms: [String] = [
+        "academy award", "academy awards", "oscar", "oscars",
+        "golden globe", "golden globes",
+        "bafta", "primetime emmy", "emmy award", "emmy awards",
+        "won best picture", "nominated for"
     ]
 
     func expandTerms(for query: String) async -> [String] {
@@ -43,6 +50,34 @@ final class TopicKnowledgeService {
         return Array(ranked.prefix(10)).map { term in
             term.split(separator: " ").map { String($0).capitalized }.joined(separator: " ")
         }
+    }
+
+    func hasAwardsSignal(title: String, year: Int?, mediaHint: String) async -> Bool {
+        let key = normalize([title, year.map(String.init) ?? "", mediaHint].joined(separator: "|"))
+        if let cached = await awardsCache.get(key: key) {
+            return cached
+        }
+
+        let awardSearches = [
+            "\(title) \(year.map(String.init) ?? "") \(mediaHint)",
+            "\(title) \(mediaHint)",
+            title
+        ]
+
+        var hasSignal = false
+        for search in awardSearches {
+            let titles = await fetchWikipediaTitles(search: search)
+            guard let best = titles.first else { continue }
+            let summaryTerms = await fetchWikipediaSummaryTerms(title: best)
+            let summaryText = summaryTerms.joined(separator: " ")
+            if awardTerms.contains(where: { summaryText.contains(normalize($0)) }) {
+                hasSignal = true
+                break
+            }
+        }
+
+        await awardsCache.set(key: key, value: hasSignal)
+        return hasSignal
     }
 
     private func seedTokens(from normalizedQuery: String) -> Set<String> {
@@ -108,5 +143,17 @@ final class TopicKnowledgeService {
         } catch {
             return []
         }
+    }
+}
+
+private actor AwardsSignalCache {
+    private var store: [String: Bool] = [:]
+
+    func get(key: String) -> Bool? {
+        store[key]
+    }
+
+    func set(key: String, value: Bool) {
+        store[key] = value
     }
 }

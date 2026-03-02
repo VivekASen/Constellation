@@ -27,12 +27,7 @@ final class RecommendationEngineV2 {
         "murder mystery": ["Knives Out", "Se7en", "True Detective", "Sherlock", "Zodiac"],
         "mystery": ["Knives Out", "Sherlock", "True Detective", "Prisoners", "The Girl with the Dragon Tattoo"],
         "political intrigue": ["House of Cards", "The West Wing", "The Ides of March", "Tinker Tailor Soldier Spy"],
-        "fantasy": ["The Lord of the Rings", "Game of Thrones", "The Witcher", "House of the Dragon"],
-        "world war 2": ["Saving Private Ryan", "Band of Brothers", "The Pianist", "Dunkirk", "Schindler's List", "The Pacific"],
-        "world war ii": ["Saving Private Ryan", "Band of Brothers", "The Pianist", "Dunkirk", "Schindler's List", "The Pacific"],
-        "ww2": ["Saving Private Ryan", "Band of Brothers", "The Pianist", "Dunkirk", "Schindler's List", "The Pacific"],
-        "ancient rome": ["Gladiator", "Rome", "Spartacus", "Ben-Hur", "Julius Caesar", "The Eagle"],
-        "roman empire": ["Gladiator", "Rome", "Spartacus", "Ben-Hur", "Julius Caesar", "The Eagle"]
+        "fantasy": ["The Lord of the Rings", "Game of Thrones", "The Witcher", "House of the Dragon"]
     ]
     
     private let genericTerms: Set<String> = [
@@ -50,49 +45,6 @@ final class RecommendationEngineV2 {
         "best", "good", "great", "strong", "suggest", "suggestion", "suggestions",
         "about", "with", "for", "and", "the", "a", "an", "more"
     ]
-    private let topicAliasCatalog: [String: TopicAlias] = [
-        "world war 2": TopicAlias(
-            phrases: ["world war 2", "world war ii", "ww2", "wwii", "second world war"],
-            tokens: ["wwii", "world war ii", "world war 2", "nazi", "allied", "axis", "holocaust", "hitler", "normandy", "dunkirk", "wehrmacht", "resistance"],
-            mustContainAny: ["wwii", "nazi", "allied", "axis", "holocaust", "hitler", "normandy", "dunkirk", "wehrmacht"]
-        ),
-        "world war ii": TopicAlias(
-            phrases: ["world war 2", "world war ii", "ww2", "wwii", "second world war"],
-            tokens: ["wwii", "world war ii", "world war 2", "nazi", "allied", "axis", "holocaust", "hitler", "normandy", "dunkirk", "wehrmacht", "resistance"],
-            mustContainAny: ["wwii", "nazi", "allied", "axis", "holocaust", "hitler", "normandy", "dunkirk", "wehrmacht"]
-        ),
-        "ww2": TopicAlias(
-            phrases: ["world war 2", "world war ii", "ww2", "wwii", "second world war"],
-            tokens: ["wwii", "world war ii", "world war 2", "nazi", "allied", "axis", "holocaust", "hitler", "normandy", "dunkirk", "wehrmacht", "resistance"],
-            mustContainAny: ["wwii", "nazi", "allied", "axis", "holocaust", "hitler", "normandy", "dunkirk", "wehrmacht"]
-        ),
-        "wwii": TopicAlias(
-            phrases: ["world war 2", "world war ii", "ww2", "wwii", "second world war"],
-            tokens: ["wwii", "world war ii", "world war 2", "nazi", "allied", "axis", "holocaust", "hitler", "normandy", "dunkirk", "wehrmacht", "resistance"],
-            mustContainAny: ["wwii", "nazi", "allied", "axis", "holocaust", "hitler", "normandy", "dunkirk", "wehrmacht"]
-        ),
-        "ancient rome": TopicAlias(
-            phrases: ["ancient rome", "roman empire", "roman republic", "julius caesar", "rome"],
-            tokens: ["roman", "rome", "caesar", "empire", "republic", "gladiator", "legion", "senate"],
-            mustContainAny: ["roman", "rome", "caesar", "gladiator", "legion", "senate"]
-        ),
-        "roman empire": TopicAlias(
-            phrases: ["ancient rome", "roman empire", "roman republic", "julius caesar", "rome"],
-            tokens: ["roman", "rome", "caesar", "empire", "republic", "gladiator", "legion", "senate"],
-            mustContainAny: ["roman", "rome", "caesar", "gladiator", "legion", "senate"]
-        ),
-        "bee": TopicAlias(
-            phrases: ["bee", "bees", "honey bee", "honeybee", "beekeeping", "pollination", "hive"],
-            tokens: ["bee", "bees", "honey", "hive", "pollination", "beekeeper", "insect"],
-            mustContainAny: ["bee", "bees", "hive", "pollination", "honey", "beekeeper"]
-        ),
-        "bees": TopicAlias(
-            phrases: ["bees", "honey bee", "beekeeping", "pollination", "hive"],
-            tokens: ["bee", "bees", "honey", "hive", "pollination", "beekeeper", "insect"],
-            mustContainAny: ["bee", "bees", "hive", "pollination", "honey", "beekeeper"]
-        )
-    ]
-    
     private init() {}
     
     func recommend(
@@ -102,8 +54,8 @@ final class RecommendationEngineV2 {
         userTVShows: [TVShow]
     ) async -> RecommendationResult {
         let intent = parseIntent(from: query)
-        let topicConstraint = buildTopicConstraint(query: query, understanding: understanding)
         let expandedTopicTerms = await topicKnowledgeService.expandTerms(for: query)
+        let topicConstraint = buildTopicConstraint(query: query, understanding: understanding, expandedTerms: expandedTopicTerms)
         let retrievalSnapshot = vectorRetriever.retrieve(
             query: query,
             understanding: understanding,
@@ -161,20 +113,28 @@ final class RecommendationEngineV2 {
                 .filter { satisfiesTVIntent($0, intent: intent) }
                 .filter { satisfiesTVTopicConstraintRelaxed($0, topicConstraint: topicConstraint) }
         }
+
+        let stableMovies = filteredMovies
+        let stableTVShows = filteredTVShows
+        async let movieAwardBoostIDs = detectAwardBoostMovieIDs(in: stableMovies)
+        async let tvAwardBoostIDs = detectAwardBoostTVIDs(in: stableTVShows)
+        let (movieAwardIDs, tvAwardIDs) = await (movieAwardBoostIDs, tvAwardBoostIDs)
         
         let movieRanks = rankMovies(
             filteredMovies,
             query: query,
             understanding: understanding,
             userMovies: userMovies,
-            retrievalSnapshot: retrievalSnapshot
+            retrievalSnapshot: retrievalSnapshot,
+            awardBoostIDs: movieAwardIDs
         )
         let tvRanks = rankTVShows(
             filteredTVShows,
             query: query,
             understanding: understanding,
             userTVShows: userTVShows,
-            retrievalSnapshot: retrievalSnapshot
+            retrievalSnapshot: retrievalSnapshot,
+            awardBoostIDs: tvAwardIDs
         )
         
         return RecommendationResult(
@@ -332,7 +292,8 @@ final class RecommendationEngineV2 {
         query: String,
         understanding: QueryUnderstanding,
         userMovies: [Movie],
-        retrievalSnapshot: VectorRetrievalSnapshot
+        retrievalSnapshot: VectorRetrievalSnapshot,
+        awardBoostIDs: Set<Int>
     ) -> [RankedMovieRecommendation] {
         let config = RecommendationRankingConfig.current
         let intentTokens = focusedIntentTokens(query: query, understanding: understanding)
@@ -363,14 +324,22 @@ final class RecommendationEngineV2 {
             let novelty = 1.0 - maxSeenSimilarity
             
             let popularity = normalizedPopularity(voteCount: movie.voteCount)
+            let strongPopularity = normalizedStrongPopularity(voteCount: movie.voteCount)
             var rawScore =
                 config.semanticWeight * semantic +
                 config.qualityWeight * quality +
                 config.popularityWeight * popularity +
-                config.noveltyWeight * novelty
+                config.noveltyWeight * novelty +
+                0.18 * strongPopularity
             
             if (movie.voteCount ?? 0) < minimumMovieVoteCount {
-                rawScore -= 0.12
+                rawScore -= 0.20
+            }
+            if (movie.voteCount ?? 0) < 70 {
+                rawScore -= 0.35
+            }
+            if awardBoostIDs.contains(movie.id) {
+                rawScore += 0.08
             }
             if hasIntentSignal && semantic < 0.02 {
                 rawScore -= 0.30
@@ -418,7 +387,8 @@ final class RecommendationEngineV2 {
         query: String,
         understanding: QueryUnderstanding,
         userTVShows: [TVShow],
-        retrievalSnapshot: VectorRetrievalSnapshot
+        retrievalSnapshot: VectorRetrievalSnapshot,
+        awardBoostIDs: Set<Int>
     ) -> [RankedTVRecommendation] {
         let config = RecommendationRankingConfig.current
         let intentTokens = focusedIntentTokens(query: query, understanding: understanding)
@@ -449,14 +419,22 @@ final class RecommendationEngineV2 {
             let novelty = 1.0 - maxSeenSimilarity
             
             let popularity = normalizedPopularity(voteCount: show.voteCount)
+            let strongPopularity = normalizedStrongPopularity(voteCount: show.voteCount)
             var rawScore =
                 config.semanticWeight * semantic +
                 config.qualityWeight * quality +
                 config.popularityWeight * popularity +
-                config.noveltyWeight * novelty
+                config.noveltyWeight * novelty +
+                0.18 * strongPopularity
             
             if (show.voteCount ?? 0) < minimumTVVoteCount {
-                rawScore -= 0.12
+                rawScore -= 0.20
+            }
+            if (show.voteCount ?? 0) < 50 {
+                rawScore -= 0.35
+            }
+            if awardBoostIDs.contains(show.id) {
+                rawScore += 0.08
             }
             if hasIntentSignal && semantic < 0.02 {
                 rawScore -= 0.30
@@ -689,6 +667,13 @@ final class RecommendationEngineV2 {
         let scaled = log(Double(count) + 1.0) / log(6000.0)
         return min(1.0, max(0.0, scaled))
     }
+
+    private func normalizedStrongPopularity(voteCount: Int?) -> Double {
+        let count = max(0, voteCount ?? 0)
+        guard count > 0 else { return 0 }
+        let scaled = log(Double(count) + 1.0) / log(40000.0)
+        return min(1.0, max(0.0, scaled))
+    }
     
     private func cleanSuggestion(_ suggestion: String) -> String? {
         let cleaned = normalize(suggestion)
@@ -820,7 +805,7 @@ final class RecommendationEngineV2 {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func buildTopicConstraint(query: String, understanding: QueryUnderstanding) -> TopicConstraint {
+    private func buildTopicConstraint(query: String, understanding: QueryUnderstanding, expandedTerms: [String]) -> TopicConstraint {
         let focused = sanitizeQueryForSearch(query)
             .split(separator: "|")
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -828,36 +813,75 @@ final class RecommendationEngineV2 {
         let normalizedQuery = normalize(focused)
         var phrases: Set<String> = []
         var tokens: Set<String> = []
-        var mustContainAny: Set<String> = []
-        var strict = false
-
-        for (key, alias) in topicAliasCatalog where normalizedQuery.contains(key) {
-            phrases.formUnion(alias.phrases.map(normalize))
-            tokens.formUnion(alias.tokens.map(normalize))
-            mustContainAny.formUnion(alias.mustContainAny.map(normalize))
-            strict = true
-        }
+        let expandedNormalized = expandedTerms.map(normalize)
+        phrases.formUnion(expandedNormalized.filter { $0.split(separator: " ").count > 1 })
 
         let understandingTokens = tokenize((understanding.themes + understanding.genres).joined(separator: " "))
         let queryTokens = tokenize(normalizedQuery).filter { !topicStopTokens.contains($0) }
+        let expandedTokens = Set(expandedNormalized.flatMap { tokenize($0) }.filter { !topicStopTokens.contains($0) })
 
-        if !strict {
-            tokens.formUnion(understandingTokens.filter { !topicStopTokens.contains($0) })
-        }
+        tokens.formUnion(understandingTokens.filter { !topicStopTokens.contains($0) })
         tokens.formUnion(queryTokens)
-
-        if strict && tokens.count < 2 {
-            tokens.formUnion(queryTokens)
-        }
+        tokens.formUnion(expandedTokens)
 
         let seedQueries = Array(phrases.prefix(6)) + tokens.map { $0.capitalized }
         return TopicConstraint(
             requiredPhrases: Array(phrases),
             requiredTokens: tokens,
-            mustContainAny: mustContainAny,
-            strict: strict,
             seedQueries: seedQueries
         )
+    }
+
+    private func detectAwardBoostMovieIDs(in candidates: [TMDBMovie]) async -> Set<Int> {
+        let shortlist = candidates
+            .sorted { ($0.voteCount ?? 0) > ($1.voteCount ?? 0) }
+            .prefix(8)
+
+        let pairs = await withTaskGroup(of: (Int, Bool).self) { group in
+            for movie in shortlist {
+                group.addTask {
+                    let hasAwards = await self.topicKnowledgeService.hasAwardsSignal(
+                        title: movie.title,
+                        year: movie.year,
+                        mediaHint: "film"
+                    )
+                    return (movie.id, hasAwards)
+                }
+            }
+
+            var output: [(Int, Bool)] = []
+            for await value in group {
+                output.append(value)
+            }
+            return output
+        }
+        return Set(pairs.filter { $0.1 }.map { $0.0 })
+    }
+
+    private func detectAwardBoostTVIDs(in candidates: [TMDBTVShow]) async -> Set<Int> {
+        let shortlist = candidates
+            .sorted { ($0.voteCount ?? 0) > ($1.voteCount ?? 0) }
+            .prefix(8)
+
+        let pairs = await withTaskGroup(of: (Int, Bool).self) { group in
+            for show in shortlist {
+                group.addTask {
+                    let hasAwards = await self.topicKnowledgeService.hasAwardsSignal(
+                        title: show.title,
+                        year: show.year,
+                        mediaHint: "tv series"
+                    )
+                    return (show.id, hasAwards)
+                }
+            }
+
+            var output: [(Int, Bool)] = []
+            for await value in group {
+                output.append(value)
+            }
+            return output
+        }
+        return Set(pairs.filter { $0.1 }.map { $0.0 })
     }
 }
 
@@ -893,17 +917,9 @@ private enum RecommendationMediaMode {
     case tvOnly
 }
 
-private struct TopicAlias {
-    let phrases: [String]
-    let tokens: [String]
-    let mustContainAny: [String]
-}
-
 private struct TopicConstraint {
     let requiredPhrases: [String]
     let requiredTokens: Set<String>
-    let mustContainAny: Set<String>
-    let strict: Bool
     let seedQueries: [String]
 
     var isActive: Bool {
@@ -919,13 +935,6 @@ private struct TopicConstraint {
         if phraseHit { return true }
 
         let tokenHits = tokens.intersection(requiredTokens).count
-        if strict {
-            if !mustContainAny.isEmpty {
-                let mustHit = tokens.intersection(mustContainAny).count > 0
-                return mustHit
-            }
-            return tokenHits >= min(2, max(1, requiredTokens.count))
-        }
         return tokenHits >= 1
     }
 
@@ -933,10 +942,6 @@ private struct TopicConstraint {
         guard isActive else { return true }
         let phraseHit = requiredPhrases.contains { normalizedText.contains($0) }
         if phraseHit { return true }
-
-        if !mustContainAny.isEmpty {
-            return tokens.intersection(mustContainAny).count > 0
-        }
         return tokens.intersection(requiredTokens).count > 0
     }
 }

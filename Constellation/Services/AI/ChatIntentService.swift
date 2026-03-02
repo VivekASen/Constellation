@@ -134,6 +134,33 @@ final class ChatIntentService {
         }
     }
 
+    func shouldSuggestTopicReset(message: String, state: ChatConversationState) -> Bool {
+        guard let currentTopic = state.topic, !currentTopic.isEmpty else { return false }
+        let normalizedMessage = normalize(message)
+        if normalizedMessage.isEmpty { return false }
+
+        // Explicit controls should never be treated as drift.
+        if containsAny(normalizedMessage, terms: ["reset", "start over", "new chat", "clear chat", "switch topic", "switch to"]) {
+            return false
+        }
+        if containsAny(normalizedMessage, terms: ["more", "another", "similar", "keep going", "next", "same"]) {
+            return false
+        }
+        if isMetaOnlyMessage(normalizedMessage) {
+            return false
+        }
+        if !isLikelyStandaloneTopic(normalizedMessage) {
+            return false
+        }
+
+        let newTokens = tokenizeForTopic(normalizedMessage)
+        let currentTokens = tokenizeForTopic(normalize(currentTopic))
+        guard !newTokens.isEmpty, !currentTokens.isEmpty else { return false }
+
+        let overlap = jaccard(newTokens, currentTokens)
+        return overlap < 0.15
+    }
+
     private func planTurnHeuristic(message: String, state: ChatConversationState) -> ChatTurnPlan {
         let normalized = normalize(message)
         let wantsMore = containsAny(normalized, terms: ["more", "another", "anything else", "similar", "keep going", "next", "additional"])
@@ -339,6 +366,26 @@ final class ChatIntentService {
             let pattern = "\\b" + NSRegularExpression.escapedPattern(for: term) + "\\b"
             return text.range(of: pattern, options: .regularExpression) != nil
         }
+    }
+
+    private func tokenizeForTopic(_ text: String) -> Set<String> {
+        let stopwords: Set<String> = [
+            "movie", "movies", "film", "films", "tv", "show", "shows", "series",
+            "more", "another", "suggestion", "suggestions", "recommend", "recommendations",
+            "best", "good", "great", "about", "with", "for", "and", "the", "a", "an"
+        ]
+        return Set(
+            text.split(separator: " ").map(String.init).filter {
+                $0.count >= 3 && !$0.allSatisfy(\.isNumber) && !stopwords.contains($0)
+            }
+        )
+    }
+
+    private func jaccard(_ a: Set<String>, _ b: Set<String>) -> Double {
+        let unionCount = a.union(b).count
+        guard unionCount > 0 else { return 0 }
+        let intersectionCount = a.intersection(b).count
+        return Double(intersectionCount) / Double(unionCount)
     }
 
     private func isMetaOnlyMessage(_ normalized: String) -> Bool {

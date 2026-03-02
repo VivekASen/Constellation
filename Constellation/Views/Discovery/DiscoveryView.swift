@@ -15,6 +15,7 @@ struct DiscoveryView: View {
     @State private var pendingMovieForAddFeedback: TMDBMovie?
     @State private var pendingTVForAddFeedback: TMDBTVShow?
     @State private var toastMessage: String?
+    @State private var pendingTopicSwitch: String?
 
     private let starterPrompts = [
         "space exploration",
@@ -37,7 +38,7 @@ struct DiscoveryView: View {
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 14) {
                             assistantBubble("Tell me what you want to watch and I’ll refine with you. I can compare against your library and keep improving suggestions each turn.")
 
                             if turns.isEmpty {
@@ -76,6 +77,7 @@ struct DiscoveryView: View {
                                                 showingAddMovie = movieSelection(for: movie, in: result)
                                             }
                                         )
+                                        .id("turn-\(turn.id.uuidString)-movie-\(movie.id)")
                                     }
                                 }
 
@@ -104,6 +106,7 @@ struct DiscoveryView: View {
                                                 showingAddTVShow = tvSelection(for: show, in: result)
                                             }
                                         )
+                                        .id("turn-\(turn.id.uuidString)-tv-\(show.id)")
                                     }
                                 }
 
@@ -250,6 +253,41 @@ struct DiscoveryView: View {
     private func submitMessage(_ rawMessage: String) async {
         let message = rawMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
+
+        if let pendingTopic = pendingTopicSwitch {
+            if shouldConfirmTopicSwitch(message) {
+                pendingTopicSwitch = nil
+                resetConversation()
+                await submitMessage(pendingTopic)
+                return
+            }
+            if shouldKeepCurrentTopic(message) {
+                pendingTopicSwitch = nil
+                turns.append(
+                    DiscoveryChatTurn(
+                        userText: message,
+                        assistantSummary: "Staying on the current topic. Ask for more, or type a new topic and confirm switch.",
+                        result: nil,
+                        displayPreference: ChatDisplayPreference(movieLimit: 0, tvLimit: 0)
+                    )
+                )
+                return
+            }
+        }
+
+        if intentService.shouldSuggestTopicReset(message: message, state: conversationState) {
+            pendingTopicSwitch = message
+            turns.append(
+                DiscoveryChatTurn(
+                    userText: message,
+                    assistantSummary: "This looks like a different topic than your current thread. Reply \"switch\" to reset and search this new topic, or \"keep\" to stay on the current one.",
+                    result: nil,
+                    displayPreference: ChatDisplayPreference(movieLimit: 0, tvLimit: 0)
+                )
+            )
+            return
+        }
+
         draftQuery = ""
         isSearching = true
 
@@ -478,6 +516,19 @@ struct DiscoveryView: View {
         conversationState = ChatConversationState()
         draftQuery = ""
         toastMessage = nil
+        pendingTopicSwitch = nil
+    }
+
+    private func shouldConfirmTopicSwitch(_ message: String) -> Bool {
+        let normalized = message.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let confirms: Set<String> = ["switch", "yes", "y", "reset", "new topic", "start over", "go ahead"]
+        return confirms.contains(normalized)
+    }
+
+    private func shouldKeepCurrentTopic(_ message: String) -> Bool {
+        let normalized = message.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let keepers: Set<String> = ["keep", "stay", "no", "n", "continue", "same topic"]
+        return keepers.contains(normalized)
     }
 
     private func mediaSubtitle(year: Int?, rating: Double?) -> String {
