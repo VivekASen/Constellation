@@ -43,9 +43,8 @@ final class ChatIntentService {
     private init() {}
 
     func planTurn(message: String, state: ChatConversationState) async -> ChatTurnPlan {
-        if let llm = await planTurnWithLLM(message: message, state: state) {
-            return sanitize(plan: llm, message: message, state: state)
-        }
+        // Deterministic planning is more stable for app-side chat flow
+        // and avoids topic drift from model variability.
         let heuristic = planTurnHeuristic(message: message, state: state)
         return sanitize(plan: heuristic, message: message, state: state)
     }

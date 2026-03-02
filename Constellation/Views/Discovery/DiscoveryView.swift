@@ -52,7 +52,7 @@ struct DiscoveryView: View {
                                 }
 
                                 if let result = turn.result, turn.displayPreference.movieLimit > 0 {
-                                    ForEach(Array(filteredMovies(from: result).prefix(turn.displayPreference.movieLimit))) { movie in
+                                    ForEach(Array(displayedMovies(from: result).prefix(turn.displayPreference.movieLimit))) { movie in
                                         let isAdded = isMovieInLibrary(movie.id)
                                         mediaBubble(
                                             title: movie.title,
@@ -80,7 +80,7 @@ struct DiscoveryView: View {
                                 }
 
                                 if let result = turn.result, turn.displayPreference.tvLimit > 0 {
-                                    ForEach(Array(filteredTV(from: result).prefix(turn.displayPreference.tvLimit))) { show in
+                                    ForEach(Array(displayedTV(from: result).prefix(turn.displayPreference.tvLimit))) { show in
                                         let isAdded = isTVInLibrary(show.id)
                                         mediaBubble(
                                             title: show.title,
@@ -286,8 +286,8 @@ struct DiscoveryView: View {
     }
 
     private func hasRenderableResults(in result: DiscoveryResult, display: ChatDisplayPreference) -> Bool {
-        let hasMovieCards = display.movieLimit > 0 && !Array(filteredMovies(from: result).prefix(display.movieLimit)).isEmpty
-        let hasTVCards = display.tvLimit > 0 && !Array(filteredTV(from: result).prefix(display.tvLimit)).isEmpty
+        let hasMovieCards = display.movieLimit > 0 && !Array(displayedMovies(from: result).prefix(display.movieLimit)).isEmpty
+        let hasTVCards = display.tvLimit > 0 && !Array(displayedTV(from: result).prefix(display.tvLimit)).isEmpty
         return hasMovieCards || hasTVCards
     }
 
@@ -315,6 +315,20 @@ struct DiscoveryView: View {
                 || semantic >= 0.12
                 || score >= 0.28
         }
+    }
+
+    private func displayedMovies(from result: DiscoveryResult) -> [TMDBMovie] {
+        let filtered = filteredMovies(from: result)
+        if !filtered.isEmpty { return filtered }
+        let rejected = memoryStore.rejectedMovieIDs
+        return result.recommendations.filter { !rejected.contains($0.id) }
+    }
+
+    private func displayedTV(from result: DiscoveryResult) -> [TMDBTVShow] {
+        let filtered = filteredTV(from: result)
+        if !filtered.isEmpty { return filtered }
+        let rejected = memoryStore.rejectedTVIDs
+        return result.tvRecommendations.filter { !rejected.contains($0.id) }
     }
 
     private func isMovieInLibrary(_ tmdbID: Int) -> Bool {
