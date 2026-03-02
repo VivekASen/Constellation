@@ -20,6 +20,11 @@ struct ContentView: View {
                 .tabItem {
                     Label("Discover", systemImage: "sparkles")
                 }
+
+            LibraryView()
+                .tabItem {
+                    Label("Library", systemImage: "books.vertical.fill")
+                }
             
             CollectionsView()
                 .tabItem {
@@ -84,7 +89,7 @@ struct HomeView: View {
                         .buttonStyle(.plain)
                         
                         StatCard(title: "Collections", count: collections.count, icon: "📚")
-
+                        
                     }
                     .padding(.horizontal)
 
