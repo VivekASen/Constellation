@@ -17,7 +17,6 @@ struct SettingsView: View {
     @AppStorage("recommend.noveltyWeight") private var recommendationNoveltyWeight = 0.10
     @AppStorage("recommend.diversityBalance") private var recommendationDiversityBalance = 0.78
     @AppStorage("recommend.coherenceThreshold") private var recommendationCoherenceThreshold = 0.22
-    @AppStorage("recommend.enableTasteDiveBlend") private var enableTasteDiveBlend = false
     @State private var cloudStatusText = "Checking iCloud status..."
     
     var body: some View {
@@ -104,14 +103,10 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("Recommendation Sources") {
-                    Toggle("Enable TasteDive Signal Blend", isOn: $enableTasteDiveBlend)
-                    Text("When enabled, recommendations blend your personal library profile with TasteDive relationship signals and TMDB ranking.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                
                 Section("Notes") {
+                    Text("Recommendation source blending is configured in the backend and always on by default.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     Text("This setting affects new theme normalization during extraction and discovery.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)

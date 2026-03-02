@@ -16,6 +16,11 @@ struct ContentView: View {
                     Label("Home", systemImage: "house.fill")
                 }
 
+            DiscoveryView()
+                .tabItem {
+                    Label("Discover", systemImage: "sparkles")
+                }
+
             LibraryView()
                 .tabItem {
                     Label("Library", systemImage: "books.vertical.fill")
@@ -48,7 +53,6 @@ struct HomeView: View {
     @Query private var collections: [ItemCollection]
 
     
-    @AppStorage("recommend.enableTasteDiveBlend") private var enableTasteDiveBlend = false
     @State private var activeSheet: AddMediaSheet?
     @State private var homeSuggestions: [HomeSuggestion] = []
     @State private var isLoadingSuggestions = false
@@ -305,110 +309,108 @@ struct HomeView: View {
             }
         }
 
-        if enableTasteDiveBlend {
-            let movieSeedTitles = movies
-                .filter { $0.watchedDate != nil || ($0.rating ?? 0) >= 4.0 }
-                .sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
-                .prefix(2)
-                .map(\.title)
-            let tvSeedTitles = tvShows
-                .filter { $0.watchedDate != nil || ($0.rating ?? 0) >= 4.0 }
-                .sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
-                .prefix(2)
-                .map(\.title)
-            let seedTitles = Array(NSOrderedSet(array: movieSeedTitles + tvSeedTitles)) as? [String] ?? []
+        let movieSeedTitles = movies
+            .filter { $0.watchedDate != nil || ($0.rating ?? 0) >= 4.0 }
+            .sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
+            .prefix(2)
+            .map(\.title)
+        let tvSeedTitles = tvShows
+            .filter { $0.watchedDate != nil || ($0.rating ?? 0) >= 4.0 }
+            .sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
+            .prefix(2)
+            .map(\.title)
+        let seedTitles = Array(NSOrderedSet(array: movieSeedTitles + tvSeedTitles)) as? [String] ?? []
 
-            for seedTitle in seedTitles {
-                let tasteResults = (try? await TasteDiveService.shared.similar(query: seedTitle, limit: 8)) ?? []
-                for tasteResult in tasteResults.prefix(6) {
-                    let mediaHint = parseTasteDiveMediaType(tasteResult.type)
-                    switch mediaHint {
-                    case .movie:
-                        if let movie = await bestMovieMatch(for: tasteResult.name),
-                           !existingMovieIDs.contains(movie.id) {
-                            candidates.append(
-                                HomeSuggestion(
-                                    id: "movie-\(movie.id)",
+        for seedTitle in seedTitles {
+            let tasteResults = (try? await TasteDiveService.shared.similar(query: seedTitle, limit: 8)) ?? []
+            for tasteResult in tasteResults.prefix(6) {
+                let mediaHint = parseTasteDiveMediaType(tasteResult.type)
+                switch mediaHint {
+                case .movie:
+                    if let movie = await bestMovieMatch(for: tasteResult.name),
+                       !existingMovieIDs.contains(movie.id) {
+                        candidates.append(
+                            HomeSuggestion(
+                                id: "movie-\(movie.id)",
+                                title: movie.title,
+                                subtitle: movie.year.map(String.init) ?? "Movie",
+                                posterURL: movie.posterURL,
+                                reason: "Taste graph match from \(seedTitle)",
+                                mediaType: .movie,
+                                score: blendedScore(
                                     title: movie.title,
-                                    subtitle: movie.year.map(String.init) ?? "Movie",
-                                    posterURL: movie.posterURL,
-                                    reason: "Taste graph match from \(seedTitle)",
-                                    mediaType: .movie,
-                                    score: blendedScore(
-                                        title: movie.title,
-                                        overview: movie.overview,
-                                        voteAverage: movie.voteAverage,
-                                        voteCount: movie.voteCount,
-                                        sourceBoost: 1.3,
-                                        preferenceTerms: preferenceTerms
-                                    )
+                                    overview: movie.overview,
+                                    voteAverage: movie.voteAverage,
+                                    voteCount: movie.voteCount,
+                                    sourceBoost: 1.3,
+                                    preferenceTerms: preferenceTerms
                                 )
                             )
-                        }
-                    case .tv:
-                        if let show = await bestTVMatch(for: tasteResult.name),
-                           !existingTVIDs.contains(show.id) {
-                            candidates.append(
-                                HomeSuggestion(
-                                    id: "tv-\(show.id)",
+                        )
+                    }
+                case .tv:
+                    if let show = await bestTVMatch(for: tasteResult.name),
+                       !existingTVIDs.contains(show.id) {
+                        candidates.append(
+                            HomeSuggestion(
+                                id: "tv-\(show.id)",
+                                title: show.title,
+                                subtitle: show.year.map(String.init) ?? "TV Show",
+                                posterURL: show.posterURL,
+                                reason: "Taste graph match from \(seedTitle)",
+                                mediaType: .tv,
+                                score: blendedScore(
                                     title: show.title,
-                                    subtitle: show.year.map(String.init) ?? "TV Show",
-                                    posterURL: show.posterURL,
-                                    reason: "Taste graph match from \(seedTitle)",
-                                    mediaType: .tv,
-                                    score: blendedScore(
-                                        title: show.title,
-                                        overview: show.overview,
-                                        voteAverage: show.voteAverage,
-                                        voteCount: show.voteCount,
-                                        sourceBoost: 1.3,
-                                        preferenceTerms: preferenceTerms
-                                    )
+                                    overview: show.overview,
+                                    voteAverage: show.voteAverage,
+                                    voteCount: show.voteCount,
+                                    sourceBoost: 1.3,
+                                    preferenceTerms: preferenceTerms
                                 )
                             )
-                        }
-                    case .unknown:
-                        if let movie = await bestMovieMatch(for: tasteResult.name),
-                           !existingMovieIDs.contains(movie.id) {
-                            candidates.append(
-                                HomeSuggestion(
-                                    id: "movie-\(movie.id)",
+                        )
+                    }
+                case .unknown:
+                    if let movie = await bestMovieMatch(for: tasteResult.name),
+                       !existingMovieIDs.contains(movie.id) {
+                        candidates.append(
+                            HomeSuggestion(
+                                id: "movie-\(movie.id)",
+                                title: movie.title,
+                                subtitle: movie.year.map(String.init) ?? "Movie",
+                                posterURL: movie.posterURL,
+                                reason: "Taste graph match from \(seedTitle)",
+                                mediaType: .movie,
+                                score: blendedScore(
                                     title: movie.title,
-                                    subtitle: movie.year.map(String.init) ?? "Movie",
-                                    posterURL: movie.posterURL,
-                                    reason: "Taste graph match from \(seedTitle)",
-                                    mediaType: .movie,
-                                    score: blendedScore(
-                                        title: movie.title,
-                                        overview: movie.overview,
-                                        voteAverage: movie.voteAverage,
-                                        voteCount: movie.voteCount,
-                                        sourceBoost: 1.25,
-                                        preferenceTerms: preferenceTerms
-                                    )
+                                    overview: movie.overview,
+                                    voteAverage: movie.voteAverage,
+                                    voteCount: movie.voteCount,
+                                    sourceBoost: 1.25,
+                                    preferenceTerms: preferenceTerms
                                 )
                             )
-                        } else if let show = await bestTVMatch(for: tasteResult.name),
-                                  !existingTVIDs.contains(show.id) {
-                            candidates.append(
-                                HomeSuggestion(
-                                    id: "tv-\(show.id)",
+                        )
+                    } else if let show = await bestTVMatch(for: tasteResult.name),
+                              !existingTVIDs.contains(show.id) {
+                        candidates.append(
+                            HomeSuggestion(
+                                id: "tv-\(show.id)",
+                                title: show.title,
+                                subtitle: show.year.map(String.init) ?? "TV Show",
+                                posterURL: show.posterURL,
+                                reason: "Taste graph match from \(seedTitle)",
+                                mediaType: .tv,
+                                score: blendedScore(
                                     title: show.title,
-                                    subtitle: show.year.map(String.init) ?? "TV Show",
-                                    posterURL: show.posterURL,
-                                    reason: "Taste graph match from \(seedTitle)",
-                                    mediaType: .tv,
-                                    score: blendedScore(
-                                        title: show.title,
-                                        overview: show.overview,
-                                        voteAverage: show.voteAverage,
-                                        voteCount: show.voteCount,
-                                        sourceBoost: 1.25,
-                                        preferenceTerms: preferenceTerms
-                                    )
+                                    overview: show.overview,
+                                    voteAverage: show.voteAverage,
+                                    voteCount: show.voteCount,
+                                    sourceBoost: 1.25,
+                                    preferenceTerms: preferenceTerms
                                 )
                             )
-                        }
+                        )
                     }
                 }
             }
