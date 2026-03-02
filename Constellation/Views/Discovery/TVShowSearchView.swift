@@ -157,12 +157,25 @@ struct TVShowDetailSheet: View {
     @Environment(\.dismiss) private var dismiss
     
     let show: TMDBTVShow
+    let recommendationContext: TVRecommendationContext?
     
     @State private var showDetail: TMDBTVShowDetail?
     @State private var isLoading = true
+    @State private var addStatus: AddStatus = .watchlist
     @State private var watchedDate = Date()
     @State private var notes = ""
     @State private var rating: Double = 0
+
+    enum AddStatus: String, CaseIterable, Identifiable {
+        case watchlist
+        case watched
+        var id: String { rawValue }
+    }
+
+    init(show: TMDBTVShow, recommendationContext: TVRecommendationContext? = nil) {
+        self.show = show
+        self.recommendationContext = recommendationContext
+    }
     
     var body: some View {
         NavigationStack {
@@ -252,29 +265,51 @@ struct TVShowDetailSheet: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+
+                        if let context = recommendationContext {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Why This Was Recommended")
+                                    .font(.headline)
+                                Text(context.reason)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                HStack(spacing: 12) {
+                                    scorePill("Semantic", value: context.semanticScore)
+                                    scorePill("Coherence", value: context.coherenceScore)
+                                    scorePill("Overall", value: context.blendedScore)
+                                }
+                            }
+                        }
                         
                         Divider()
                         
                         VStack(alignment: .leading, spacing: 16) {
                             Text("Add to Your Library")
                                 .font(.headline)
-                            
-                            DatePicker("Watched Date", selection: $watchedDate, displayedComponents: .date)
-                            
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Your Rating")
-                                    .font(.subheadline)
-                                
-                                HStack(spacing: 8) {
-                                    ForEach(1...5, id: \.self) { star in
-                                        Image(systemName: star <= Int(rating) ? "star.fill" : "star")
-                                            .foregroundStyle(.yellow)
-                                            .onTapGesture {
-                                                rating = Double(star)
-                                            }
+                            Picker("Status", selection: $addStatus) {
+                                Text("Watchlist").tag(AddStatus.watchlist)
+                                Text("Watched").tag(AddStatus.watched)
+                            }
+                            .pickerStyle(.segmented)
+
+                            if addStatus == .watched {
+                                DatePicker("Watched Date", selection: $watchedDate, displayedComponents: .date)
+
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Your Rating")
+                                        .font(.subheadline)
+                                    
+                                    HStack(spacing: 8) {
+                                        ForEach(1...5, id: \.self) { star in
+                                            Image(systemName: star <= Int(rating) ? "star.fill" : "star")
+                                                .foregroundStyle(.yellow)
+                                                .onTapGesture {
+                                                    rating = Double(star)
+                                                }
+                                        }
                                     }
+                                    .font(.title2)
                                 }
-                                .font(.title2)
                             }
                             
                             VStack(alignment: .leading, spacing: 8) {
@@ -292,14 +327,14 @@ struct TVShowDetailSheet: View {
                 }
                 .padding()
             }
-            .navigationTitle("Add TV Show")
+            .navigationTitle("TV Show Details")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
+                    Button(addStatus == .watchlist ? "Add to Watchlist" : "Add as Watched") {
                         addTVShow()
                     }
                     .disabled(showDetail == nil)
@@ -325,6 +360,7 @@ struct TVShowDetailSheet: View {
     private func addTVShow() {
         guard let detail = showDetail else { return }
         
+        let isWatched = addStatus == .watched
         let newShow = TVShow(
             title: detail.title,
             year: detail.year,
@@ -334,8 +370,8 @@ struct TVShowDetailSheet: View {
             genres: detail.genres.map { $0.name },
             seasonCount: detail.numberOfSeasons,
             episodeCount: detail.numberOfEpisodes,
-            rating: rating > 0 ? rating : nil,
-            watchedDate: watchedDate,
+            rating: isWatched && rating > 0 ? rating : nil,
+            watchedDate: isWatched ? watchedDate : nil,
             notes: notes.isEmpty ? nil : notes,
             tmdbID: detail.id
         )
@@ -350,6 +386,24 @@ struct TVShowDetailSheet: View {
         
         dismiss()
     }
+
+    @ViewBuilder
+    private func scorePill(_ title: String, value: Double) -> some View {
+        Text("\(title) \(String(format: "%.2f", value))")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color(.systemGray6))
+            .cornerRadius(12)
+    }
+}
+
+struct TVRecommendationContext {
+    let reason: String
+    let semanticScore: Double
+    let coherenceScore: Double
+    let blendedScore: Double
 }
 
 #Preview {

@@ -10,8 +10,8 @@ struct DiscoveryView: View {
     @State private var isSearching = false
     @State private var turns: [DiscoveryChatTurn] = []
     @State private var conversationState = ChatConversationState()
-    @State private var showingAddMovie: TMDBMovie?
-    @State private var showingAddTVShow: TMDBTVShow?
+    @State private var showingAddMovie: DiscoveryMovieSelection?
+    @State private var showingAddTVShow: DiscoveryTVSelection?
     @State private var pendingMovieForAddFeedback: TMDBMovie?
     @State private var pendingTVForAddFeedback: TMDBTVShow?
     @State private var toastMessage: String?
@@ -64,7 +64,7 @@ struct DiscoveryView: View {
                                             isAdded: isAdded,
                                             action: {
                                                 pendingMovieForAddFeedback = movie
-                                                showingAddMovie = movie
+                                                showingAddMovie = movieSelection(for: movie, in: result)
                                             },
                                             secondaryActionTitle: isAdded ? nil : "Not this",
                                             secondaryAction: {
@@ -73,7 +73,7 @@ struct DiscoveryView: View {
                                             },
                                             onTap: {
                                                 pendingMovieForAddFeedback = movie
-                                                showingAddMovie = movie
+                                                showingAddMovie = movieSelection(for: movie, in: result)
                                             }
                                         )
                                     }
@@ -92,7 +92,7 @@ struct DiscoveryView: View {
                                             isAdded: isAdded,
                                             action: {
                                                 pendingTVForAddFeedback = show
-                                                showingAddTVShow = show
+                                                showingAddTVShow = tvSelection(for: show, in: result)
                                             },
                                             secondaryActionTitle: isAdded ? nil : "Not this",
                                             secondaryAction: {
@@ -101,7 +101,7 @@ struct DiscoveryView: View {
                                             },
                                             onTap: {
                                                 pendingTVForAddFeedback = show
-                                                showingAddTVShow = show
+                                                showingAddTVShow = tvSelection(for: show, in: result)
                                             }
                                         )
                                     }
@@ -171,10 +171,10 @@ struct DiscoveryView: View {
                 }
             }
             .sheet(item: $showingAddMovie, onDismiss: handleMovieSheetDismiss) { movie in
-                MovieDetailSheet(movie: movie)
+                MovieDetailSheet(movie: movie.movie, recommendationContext: movie.context)
             }
             .sheet(item: $showingAddTVShow, onDismiss: handleTVSheetDismiss) { show in
-                TVShowDetailSheet(show: show)
+                TVShowDetailSheet(show: show.show, recommendationContext: show.context)
             }
         }
     }
@@ -329,6 +329,30 @@ struct DiscoveryView: View {
         if !filtered.isEmpty { return filtered }
         let rejected = memoryStore.rejectedTVIDs
         return result.tvRecommendations.filter { !rejected.contains($0.id) }
+    }
+
+    private func movieSelection(for movie: TMDBMovie, in result: DiscoveryResult) -> DiscoveryMovieSelection {
+        DiscoveryMovieSelection(
+            movie: movie,
+            context: MovieRecommendationContext(
+                reason: result.movieRecommendationReasons[movie.id] ?? "Strong fit for your request",
+                semanticScore: result.movieRecommendationSemantic[movie.id] ?? 0,
+                coherenceScore: result.movieRecommendationCoherence[movie.id] ?? 0,
+                blendedScore: result.movieRecommendationScore[movie.id] ?? 0
+            )
+        )
+    }
+
+    private func tvSelection(for show: TMDBTVShow, in result: DiscoveryResult) -> DiscoveryTVSelection {
+        DiscoveryTVSelection(
+            show: show,
+            context: TVRecommendationContext(
+                reason: result.tvRecommendationReasons[show.id] ?? "Strong fit for your request",
+                semanticScore: result.tvRecommendationSemantic[show.id] ?? 0,
+                coherenceScore: result.tvRecommendationCoherence[show.id] ?? 0,
+                blendedScore: result.tvRecommendationScore[show.id] ?? 0
+            )
+        )
     }
 
     private func isMovieInLibrary(_ tmdbID: Int) -> Bool {
@@ -528,6 +552,18 @@ private struct DiscoveryChatTurn: Identifiable {
     var assistantSummary: String?
     var result: DiscoveryResult?
     var displayPreference: ChatDisplayPreference = ChatDisplayPreference(movieLimit: 1, tvLimit: 1)
+}
+
+private struct DiscoveryMovieSelection: Identifiable {
+    let movie: TMDBMovie
+    let context: MovieRecommendationContext
+    var id: Int { movie.id }
+}
+
+private struct DiscoveryTVSelection: Identifiable {
+    let show: TMDBTVShow
+    let context: TVRecommendationContext
+    var id: Int { show.id }
 }
 
 #Preview {
