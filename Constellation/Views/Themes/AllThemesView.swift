@@ -13,9 +13,9 @@ struct AllThemesView: View {
     @Query private var tvShows: [TVShow]
     
     var allThemes: [(theme: String, count: Int)] {
-        let movieThemes = movies.flatMap(\.themes)
-        let showThemes = tvShows.flatMap(\.themes)
-        let combined = movieThemes + showThemes
+        let movieThemes = movies.flatMap { ThemeExtractor.shared.normalizeThemes($0.themes) }
+        let showThemes = tvShows.flatMap { ThemeExtractor.shared.normalizeThemes($0.themes) }
+        let combined = ThemeExtractor.shared.normalizeThemes(movieThemes + showThemes)
         let grouped = Dictionary(grouping: combined) { $0 }
         
         return grouped

@@ -49,10 +49,12 @@ struct HomeView: View {
 
     
     @State private var activeSheet: AddMediaSheet?
+    @State private var homeSuggestions: [HomeSuggestion] = []
+    @State private var isLoadingSuggestions = false
     
     var allThemes: [String] {
-        let movieThemes = movies.flatMap(\.themes)
-        let tvThemes = tvShows.flatMap(\.themes)
+        let movieThemes = movies.flatMap { ThemeExtractor.shared.normalizeThemes($0.themes) }
+        let tvThemes = tvShows.flatMap { ThemeExtractor.shared.normalizeThemes($0.themes) }
         return Array(Set(movieThemes + tvThemes)).sorted()
     }
     
@@ -98,6 +100,30 @@ struct HomeView: View {
                             )
                         }
                         .padding(.horizontal)
+                    }
+
+                    if !homeSuggestions.isEmpty || isLoadingSuggestions {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text("Because You Watched")
+                                    .font(.headline)
+                                Spacer()
+                                if isLoadingSuggestions {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                }
+                            }
+                            .padding(.horizontal)
+
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 12) {
+                                    ForEach(homeSuggestions) { suggestion in
+                                        HomeSuggestionCard(suggestion: suggestion)
+                                    }
+                                }
+                                .padding(.horizontal)
+                            }
+                        }
                     }
 
                     if !movies.isEmpty {
@@ -197,7 +223,95 @@ struct HomeView: View {
                     TVShowSearchView()
                 }
             }
+            .task(id: movies.map(\.id).description + tvShows.map(\.id).description) {
+                await loadHomeSuggestions()
+            }
         }
+    }
+
+    private func loadHomeSuggestions() async {
+        guard !movies.isEmpty || !tvShows.isEmpty else {
+            homeSuggestions = []
+            return
+        }
+
+        isLoadingSuggestions = true
+        defer { isLoadingSuggestions = false }
+
+        let existingMovieIDs = Set(movies.compactMap(\.tmdbID))
+        let existingTVIDs = Set(tvShows.compactMap(\.tmdbID))
+
+        var candidates: [HomeSuggestion] = []
+
+        let movieSeeds = movies
+            .filter { $0.watchedDate != nil }
+            .sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
+            .prefix(2)
+            .compactMap(\.tmdbID)
+
+        for seed in movieSeeds {
+            let similar = (try? await TMDBService.shared.getMovieRecommendations(movieID: seed, page: 1)) ?? []
+            for item in similar where !existingMovieIDs.contains(item.id) {
+                candidates.append(
+                    HomeSuggestion(
+                        id: "movie-\(item.id)",
+                        title: item.title,
+                        subtitle: item.year.map(String.init) ?? "Movie",
+                        posterURL: item.posterURL,
+                        reason: "Matched by similar audience taste",
+                        mediaType: .movie
+                    )
+                )
+            }
+        }
+
+        let showSeeds = tvShows
+            .filter { $0.watchedDate != nil }
+            .sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
+            .prefix(2)
+            .compactMap(\.tmdbID)
+
+        for seed in showSeeds {
+            let similar = (try? await TMDBService.shared.getTVRecommendations(tvID: seed, page: 1)) ?? []
+            for item in similar where !existingTVIDs.contains(item.id) {
+                candidates.append(
+                    HomeSuggestion(
+                        id: "tv-\(item.id)",
+                        title: item.title,
+                        subtitle: item.year.map(String.init) ?? "TV Show",
+                        posterURL: item.posterURL,
+                        reason: "Matched by similar audience taste",
+                        mediaType: .tv
+                    )
+                )
+            }
+        }
+
+        if candidates.count < 6 {
+            let trending = (try? await TMDBService.shared.getTrendingAll(timeWindow: .week, page: 1)) ?? []
+            for item in trending.prefix(15) {
+                if item.mediaType == "movie", existingMovieIDs.contains(item.id) { continue }
+                if item.mediaType == "tv", existingTVIDs.contains(item.id) { continue }
+                if item.mediaType != "movie" && item.mediaType != "tv" { continue }
+
+                candidates.append(
+                    HomeSuggestion(
+                        id: "\(item.mediaType)-\(item.id)",
+                        title: item.resolvedTitle,
+                        subtitle: item.year.map(String.init) ?? item.mediaType.uppercased(),
+                        posterURL: item.posterURL,
+                        reason: "Trending this week",
+                        mediaType: item.mediaType == "movie" ? .movie : .tv
+                    )
+                )
+            }
+        }
+
+        var seen = Set<String>()
+        homeSuggestions = candidates
+            .filter { seen.insert($0.id).inserted }
+            .prefix(10)
+            .map { $0 }
     }
 }
 
@@ -405,6 +519,62 @@ struct TVShowRow: View {
         .background(Color(.systemGray6))
         .cornerRadius(12)
         .padding(.horizontal)
+    }
+}
+
+private enum HomeSuggestionMediaType {
+    case movie
+    case tv
+}
+
+private struct HomeSuggestion: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let posterURL: URL?
+    let reason: String
+    let mediaType: HomeSuggestionMediaType
+}
+
+private struct HomeSuggestionCard: View {
+    let suggestion: HomeSuggestion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            AsyncImage(url: suggestion.posterURL) { image in
+                image.resizable().aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Rectangle().fill(Color.gray.opacity(0.2))
+            }
+            .frame(width: 120, height: 180)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+
+            Text(suggestion.title)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(2)
+                .frame(width: 120, alignment: .leading)
+
+            Text(suggestion.subtitle)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Text(suggestion.reason)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+
+            Text(suggestion.mediaType == .movie ? "Movie" : "TV")
+                .font(.caption2.weight(.semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background((suggestion.mediaType == .movie ? Color.blue : Color.green).opacity(0.16))
+                .foregroundStyle(suggestion.mediaType == .movie ? .blue : .green)
+                .clipShape(Capsule())
+        }
+        .frame(width: 120, alignment: .leading)
+        .padding(10)
+        .background(Color(.systemGray6).opacity(0.75))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 }
 

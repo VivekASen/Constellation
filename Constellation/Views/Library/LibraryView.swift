@@ -6,8 +6,10 @@ struct LibraryView: View {
     @Query(sort: \Movie.dateAdded, order: .reverse) private var movies: [Movie]
     @Query(sort: \TVShow.dateAdded, order: .reverse) private var tvShows: [TVShow]
 
-    @State private var mode: LibraryMode = .watchlist
+    @State private var mode: LibraryMode = .all
     @State private var filter: LibraryMediaFilter = .all
+    @State private var sortOption: LibrarySortOption = .recentlyAdded
+    @State private var selectedTheme: String = "all"
     @State private var activeSheet: AddMediaSheet?
     @State private var markWatchedTarget: LibraryItem?
     @State private var watchedDate = Date()
@@ -18,6 +20,7 @@ struct LibraryView: View {
             List {
                 modePickerSection
                 mediaFilterSection
+                sortAndThemeSection
                 statsSection
 
                 if mode == .watched, !favoriteItems.isEmpty {
@@ -28,15 +31,12 @@ struct LibraryView: View {
                     }
                 }
 
-                Section(mode == .watchlist ? "Watchlist" : "Watched") {
+                Section(mode.sectionTitle) {
                     if visibleItems.isEmpty {
                         ContentUnavailableView(
-                            mode == .watchlist ? "No Watchlist Items" : "No Watched Items",
-                            systemImage: mode == .watchlist ? "bookmark" : "checkmark.circle",
-                            description: Text(mode == .watchlist
-                                ? "Add movies or TV shows to your watchlist from Discover."
-                                : "Mark items as watched to build your ranked favorites."
-                            )
+                            mode.emptyTitle,
+                            systemImage: mode.emptyIcon,
+                            description: Text(mode.emptyDescription)
                         )
                         .listRowBackground(Color.clear)
                     } else {
@@ -113,12 +113,19 @@ struct LibraryView: View {
                     }
                 }
             }
+            .onChange(of: mode) { _, _ in
+                reconcileThemeFilter()
+            }
+            .onChange(of: filter) { _, _ in
+                reconcileThemeFilter()
+            }
         }
     }
 
     private var modePickerSection: some View {
         Section {
             Picker("Mode", selection: $mode) {
+                Text("All").tag(LibraryMode.all)
                 Text("Watchlist").tag(LibraryMode.watchlist)
                 Text("Watched").tag(LibraryMode.watched)
             }
@@ -134,6 +141,33 @@ struct LibraryView: View {
                 Text("TV").tag(LibraryMediaFilter.tv)
             }
             .pickerStyle(.segmented)
+        }
+    }
+
+    private var sortAndThemeSection: some View {
+        Section {
+            HStack {
+                Label("Sort", systemImage: "arrow.up.arrow.down")
+                Spacer()
+                Picker("Sort", selection: $sortOption) {
+                    ForEach(LibrarySortOption.allCases) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+
+            HStack {
+                Label("Theme", systemImage: "sparkles")
+                Spacer()
+                Picker("Theme", selection: $selectedTheme) {
+                    Text("All Themes").tag("all")
+                    ForEach(availableThemes, id: \.self) { theme in
+                        Text(theme.replacingOccurrences(of: "-", with: " ").capitalized).tag(theme)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
         }
     }
 
@@ -165,30 +199,57 @@ struct LibraryView: View {
         }
     }
 
-    private var watchlistItems: [LibraryItem] {
-        let movieItems = movies.filter { $0.watchedDate == nil }.map(LibraryItem.movie)
-        let showItems = tvShows.filter { $0.watchedDate == nil }.map(LibraryItem.tvShow)
+    private var allItems: [LibraryItem] {
+        let movieItems = movies.map(LibraryItem.movie)
+        let showItems = tvShows.map(LibraryItem.tvShow)
         return applyFilter(movieItems + showItems)
-            .sorted { $0.dateAdded > $1.dateAdded }
+    }
+
+    private var watchlistItems: [LibraryItem] {
+        allItems.filter { !$0.isWatched }
     }
 
     private var watchedItems: [LibraryItem] {
-        let movieItems = movies.filter { $0.watchedDate != nil }.map(LibraryItem.movie)
-        let showItems = tvShows.filter { $0.watchedDate != nil }.map(LibraryItem.tvShow)
-        return applyFilter(movieItems + showItems)
-            .sorted(by: rankSort)
+        allItems.filter(\.isWatched)
     }
 
     private var favoriteItems: [LibraryItem] {
         Array(
             watchedItems
                 .filter { ($0.rating ?? 0) >= 4.0 }
+                .sorted(by: rankSort)
                 .prefix(10)
         )
     }
 
     private var visibleItems: [LibraryItem] {
-        mode == .watchlist ? watchlistItems : watchedItems
+        let byMode: [LibraryItem]
+        switch mode {
+        case .all:
+            byMode = allItems
+        case .watchlist:
+            byMode = watchlistItems
+        case .watched:
+            byMode = watchedItems
+        }
+
+        let themeFiltered = applyThemeFilter(byMode)
+        return sortItems(themeFiltered)
+    }
+
+    private var availableThemes: [String] {
+        let sourceItems: [LibraryItem]
+        switch mode {
+        case .all:
+            sourceItems = allItems
+        case .watchlist:
+            sourceItems = watchlistItems
+        case .watched:
+            sourceItems = watchedItems
+        }
+
+        let normalized = ThemeExtractor.shared.normalizeThemes(sourceItems.flatMap(\.themes))
+        return Array(Set(normalized)).sorted()
     }
 
     private func applyFilter(_ items: [LibraryItem]) -> [LibraryItem] {
@@ -199,6 +260,30 @@ struct LibraryView: View {
             return items.filter(\.isMovie)
         case .tv:
             return items.filter { !$0.isMovie }
+        }
+    }
+
+    private func applyThemeFilter(_ items: [LibraryItem]) -> [LibraryItem] {
+        guard selectedTheme != "all" else { return items }
+        return items.filter { item in
+            ThemeExtractor.shared.normalizeThemes(item.themes).contains(selectedTheme)
+        }
+    }
+
+    private func sortItems(_ items: [LibraryItem]) -> [LibraryItem] {
+        switch sortOption {
+        case .recentlyAdded:
+            return items.sorted { $0.dateAdded > $1.dateAdded }
+        case .oldestAdded:
+            return items.sorted { $0.dateAdded < $1.dateAdded }
+        case .highestRated:
+            return items.sorted { ($0.rating ?? -1) > ($1.rating ?? -1) }
+        case .recentlyWatched:
+            return items.sorted {
+                ($0.watchedDate ?? .distantPast) > ($1.watchedDate ?? .distantPast)
+            }
+        case .titleAZ:
+            return items.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
         }
     }
 
@@ -231,26 +316,13 @@ struct LibraryView: View {
             }
             .buttonStyle(.plain)
 
-            if mode == .watched {
+            if item.isWatched {
                 ratingMenu(for: item)
             }
         }
         .contentShape(Rectangle())
         .contextMenu {
-            if mode == .watchlist {
-                Button {
-                    watchedDate = Date()
-                    watchedRating = 0
-                    markWatchedTarget = item
-                } label: {
-                    Label("Mark as Watched", systemImage: "checkmark.circle")
-                }
-                Button(role: .destructive) {
-                    deleteItem(item: item)
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                }
-            } else {
+            if item.isWatched {
                 Menu("Set Rating") {
                     ForEach(1...5, id: \.self) { star in
                         Button("\(star) Star\(star == 1 ? "" : "s")") {
@@ -266,32 +338,38 @@ struct LibraryView: View {
                 } label: {
                     Label("Move to Watchlist", systemImage: "bookmark")
                 }
-                Button(role: .destructive) {
-                    deleteItem(item: item)
+            } else {
+                Button {
+                    watchedDate = Date()
+                    watchedRating = 0
+                    markWatchedTarget = item
                 } label: {
-                    Label("Delete", systemImage: "trash")
+                    Label("Mark as Watched", systemImage: "checkmark.circle")
                 }
+            }
+            Button(role: .destructive) {
+                deleteItem(item: item)
+            } label: {
+                Label("Delete", systemImage: "trash")
             }
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            if mode == .watchlist {
+            if item.isWatched {
+                Button("Watchlist") {
+                    markAsWatchlist(item: item)
+                }
+                .tint(.orange)
+            } else {
                 Button("Watched") {
                     watchedDate = Date()
                     watchedRating = 0
                     markWatchedTarget = item
                 }
                 .tint(.green)
-                Button("Delete", role: .destructive) {
-                    deleteItem(item: item)
-                }
-            } else {
-                Button("Move to Watchlist") {
-                    markAsWatchlist(item: item)
-                }
-                .tint(.orange)
-                Button("Delete", role: .destructive) {
-                    deleteItem(item: item)
-                }
+            }
+
+            Button("Delete", role: .destructive) {
+                deleteItem(item: item)
             }
         }
     }
@@ -310,6 +388,14 @@ struct LibraryView: View {
                     .background(item.isMovie ? Color.blue.opacity(0.12) : Color.green.opacity(0.12))
                     .foregroundStyle(item.isMovie ? .blue : .green)
                     .clipShape(Capsule())
+
+                Text(item.isWatched ? "Watched" : "Watchlist")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(item.isWatched ? Color.green.opacity(0.12) : Color.orange.opacity(0.12))
+                    .foregroundStyle(item.isWatched ? .green : .orange)
+                    .clipShape(Capsule())
             }
             HStack(spacing: 10) {
                 if let year = item.year {
@@ -327,6 +413,13 @@ struct LibraryView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            if !item.themes.isEmpty {
+                Text(item.themes.prefix(3).map { $0.replacingOccurrences(of: "-", with: " ") }.joined(separator: " • "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
         }
     }
@@ -428,12 +521,55 @@ struct LibraryView: View {
         }
         try? modelContext.save()
     }
+
+    private func reconcileThemeFilter() {
+        if selectedTheme != "all", !availableThemes.contains(selectedTheme) {
+            selectedTheme = "all"
+        }
+    }
 }
 
 private enum LibraryMode: String, CaseIterable, Identifiable {
+    case all
     case watchlist
     case watched
+
     var id: String { rawValue }
+
+    var sectionTitle: String {
+        switch self {
+        case .all: return "Library"
+        case .watchlist: return "Watchlist"
+        case .watched: return "Watched"
+        }
+    }
+
+    var emptyTitle: String {
+        switch self {
+        case .all: return "No Library Items"
+        case .watchlist: return "No Watchlist Items"
+        case .watched: return "No Watched Items"
+        }
+    }
+
+    var emptyDescription: String {
+        switch self {
+        case .all:
+            return "Add movies or TV shows to start building your library."
+        case .watchlist:
+            return "Add movies or TV shows, then keep upcoming picks here."
+        case .watched:
+            return "Mark items as watched to build your ranked favorites."
+        }
+    }
+
+    var emptyIcon: String {
+        switch self {
+        case .all: return "books.vertical"
+        case .watchlist: return "bookmark"
+        case .watched: return "checkmark.circle"
+        }
+    }
 }
 
 private enum LibraryMediaFilter: String, CaseIterable, Identifiable {
@@ -441,6 +577,26 @@ private enum LibraryMediaFilter: String, CaseIterable, Identifiable {
     case movies
     case tv
     var id: String { rawValue }
+}
+
+private enum LibrarySortOption: String, CaseIterable, Identifiable {
+    case recentlyAdded
+    case oldestAdded
+    case highestRated
+    case recentlyWatched
+    case titleAZ
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .recentlyAdded: return "Recently Added"
+        case .oldestAdded: return "Oldest Added"
+        case .highestRated: return "Highest Rated"
+        case .recentlyWatched: return "Recently Watched"
+        case .titleAZ: return "Title A–Z"
+        }
+    }
 }
 
 private enum LibraryItem: Identifiable {
@@ -464,6 +620,10 @@ private enum LibraryItem: Identifiable {
     var isMovie: Bool {
         if case .movie = self { return true }
         return false
+    }
+
+    var isWatched: Bool {
+        watchedDate != nil
     }
 
     var year: Int? {
@@ -491,6 +651,13 @@ private enum LibraryItem: Identifiable {
         switch self {
         case .movie(let movie): return movie.dateAdded
         case .tvShow(let show): return show.dateAdded
+        }
+    }
+
+    var themes: [String] {
+        switch self {
+        case .movie(let movie): return movie.themes
+        case .tvShow(let show): return show.themes
         }
     }
 }

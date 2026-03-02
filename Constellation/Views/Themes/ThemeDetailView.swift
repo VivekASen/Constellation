@@ -13,13 +13,21 @@ struct ThemeDetailView: View {
     @Query private var allTVShows: [TVShow]
     
     let themeName: String
+
+    private var normalizedThemeName: String {
+        ThemeExtractor.shared.normalizeThemes([themeName]).first ?? themeName
+    }
     
     var moviesWithTheme: [Movie] {
-        allMovies.filter { $0.themes.contains(themeName) }
+        allMovies.filter { movie in
+            ThemeExtractor.shared.normalizeThemes(movie.themes).contains(normalizedThemeName)
+        }
     }
     
     var showsWithTheme: [TVShow] {
-        allTVShows.filter { $0.themes.contains(themeName) }
+        allTVShows.filter { show in
+            ThemeExtractor.shared.normalizeThemes(show.themes).contains(normalizedThemeName)
+        }
     }
     
     var totalCount: Int {

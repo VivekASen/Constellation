@@ -10,6 +10,12 @@ import SwiftUI
 
 struct MovieDetailView: View {
     let movie: Movie
+    @Environment(\.openURL) private var openURL
+
+    @State private var trailer: TMDBVideo?
+    @State private var watchProviders: [TMDBWatchProvider] = []
+    @State private var similarMovies: [TMDBMovie] = []
+    @State private var isLoadingExtras = false
     
     var body: some View {
         ScrollView {
@@ -89,6 +95,91 @@ struct MovieDetailView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+
+                    if isLoadingExtras {
+                        ProgressView("Loading trailers and streaming info…")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    if let trailer, let url = trailer.youtubeURL {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Trailer")
+                                .font(.headline)
+                            Button {
+                                openURL(url)
+                            } label: {
+                                Label(trailer.name, systemImage: "play.rectangle.fill")
+                                    .font(.subheadline.weight(.semibold))
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(Color.red.opacity(0.14))
+                                    .foregroundStyle(.red)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    if !watchProviders.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Where to Watch (US)")
+                                .font(.headline)
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(watchProviders.prefix(10)) { provider in
+                                        HStack(spacing: 6) {
+                                            if let logo = provider.logoURL {
+                                                AsyncImage(url: logo) { image in
+                                                    image.resizable().scaledToFit()
+                                                } placeholder: {
+                                                    Color.gray.opacity(0.2)
+                                                }
+                                                .frame(width: 18, height: 18)
+                                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                            }
+                                            Text(provider.providerName)
+                                                .font(.caption)
+                                        }
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(Color.blue.opacity(0.12))
+                                        .clipShape(Capsule())
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if !similarMovies.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Similar Picks")
+                                .font(.headline)
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 10) {
+                                    ForEach(similarMovies.prefix(8)) { similar in
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            AsyncImage(url: similar.posterURL) { image in
+                                                image.resizable().aspectRatio(contentMode: .fill)
+                                            } placeholder: {
+                                                Rectangle().fill(Color.gray.opacity(0.25))
+                                            }
+                                            .frame(width: 110, height: 165)
+                                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                                            Text(similar.title)
+                                                .font(.caption.weight(.semibold))
+                                                .lineLimit(2)
+                                                .frame(width: 110, alignment: .leading)
+                                            if let year = similar.year {
+                                                Text(String(year))
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     
                     // Themes
                     if !movie.themes.isEmpty {
@@ -128,6 +219,46 @@ struct MovieDetailView: View {
             .padding(.vertical)
         }
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: movie.id) {
+            await loadEnhancements()
+        }
+    }
+
+    private func loadEnhancements() async {
+        guard let tmdbID = movie.tmdbID else { return }
+        isLoadingExtras = true
+        defer { isLoadingExtras = false }
+
+        async let videosTask = TMDBService.shared.getMovieVideos(movieID: tmdbID)
+        async let providersTask = TMDBService.shared.getMovieWatchProviders(movieID: tmdbID)
+        async let similarTask = TMDBService.shared.getSimilarMovies(movieID: tmdbID)
+
+        do {
+            let videos = try await videosTask
+            trailer = videos.first(where: { video in
+                video.site.lowercased() == "youtube" && (video.type == "Trailer" || video.official == true)
+            }) ?? videos.first(where: { $0.site.lowercased() == "youtube" })
+        } catch {
+            trailer = nil
+        }
+
+        do {
+            watchProviders = try await providersTask
+        } catch {
+            watchProviders = []
+        }
+
+        do {
+            similarMovies = try await similarTask
+                .filter { $0.voteCount ?? 0 >= 120 }
+                .sorted { lhs, rhs in
+                    let l = (lhs.voteAverage ?? 0) * log10(Double(max(lhs.voteCount ?? 1, 1)))
+                    let r = (rhs.voteAverage ?? 0) * log10(Double(max(rhs.voteCount ?? 1, 1)))
+                    return l > r
+                }
+        } catch {
+            similarMovies = []
+        }
     }
 }
 

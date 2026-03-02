@@ -43,6 +43,13 @@ class TMDBService {
         return response.results
     }
 
+    func getTopRatedMovies(page: Int = 1) async throws -> [TMDBMovie] {
+        let urlString = "\(baseURL)/movie/top_rated?api_key=\(apiKey)&page=\(max(1, page))"
+        let data = try await fetchData(urlString: urlString, ttl: popularTTL)
+        let response = try JSONDecoder().decode(TMDBSearchResponse.self, from: data)
+        return response.results
+    }
+
     func discoverMovies(genreID: Int, page: Int = 1) async throws -> [TMDBMovie] {
         let urlString = "\(baseURL)/discover/movie?api_key=\(apiKey)&with_genres=\(genreID)&sort_by=vote_count.desc&vote_count.gte=200&page=\(max(1, page))"
         let data = try await fetchData(urlString: urlString, ttl: popularTTL)
@@ -62,6 +69,20 @@ class TMDBService {
         let data = try await fetchData(urlString: urlString, ttl: searchTTL)
         let response = try JSONDecoder().decode(TMDBSearchResponse.self, from: data)
         return response.results
+    }
+
+    func getMovieVideos(movieID: Int) async throws -> [TMDBVideo] {
+        let urlString = "\(baseURL)/movie/\(movieID)/videos?api_key=\(apiKey)"
+        let data = try await fetchData(urlString: urlString, ttl: detailTTL)
+        let response = try JSONDecoder().decode(TMDBVideosResponse.self, from: data)
+        return response.results
+    }
+
+    func getMovieWatchProviders(movieID: Int, region: String = "US") async throws -> [TMDBWatchProvider] {
+        let urlString = "\(baseURL)/movie/\(movieID)/watch/providers?api_key=\(apiKey)"
+        let data = try await fetchData(urlString: urlString, ttl: detailTTL)
+        let response = try JSONDecoder().decode(TMDBWatchProvidersResponse.self, from: data)
+        return response.results[region]?.allProviders ?? []
     }
 
     func getMovieKeywords(movieID: Int) async throws -> [String] {
@@ -101,6 +122,13 @@ class TMDBService {
         return response.results
     }
 
+    func getTopRatedTVShows(page: Int = 1) async throws -> [TMDBTVShow] {
+        let urlString = "\(baseURL)/tv/top_rated?api_key=\(apiKey)&page=\(max(1, page))"
+        let data = try await fetchData(urlString: urlString, ttl: popularTTL)
+        let response = try JSONDecoder().decode(TMDBTVSearchResponse.self, from: data)
+        return response.results
+    }
+
     func discoverTVShows(genreID: Int, page: Int = 1) async throws -> [TMDBTVShow] {
         let urlString = "\(baseURL)/discover/tv?api_key=\(apiKey)&with_genres=\(genreID)&sort_by=vote_count.desc&vote_count.gte=150&page=\(max(1, page))"
         let data = try await fetchData(urlString: urlString, ttl: popularTTL)
@@ -122,6 +150,20 @@ class TMDBService {
         return response.results
     }
 
+    func getTVVideos(tvID: Int) async throws -> [TMDBVideo] {
+        let urlString = "\(baseURL)/tv/\(tvID)/videos?api_key=\(apiKey)"
+        let data = try await fetchData(urlString: urlString, ttl: detailTTL)
+        let response = try JSONDecoder().decode(TMDBVideosResponse.self, from: data)
+        return response.results
+    }
+
+    func getTVWatchProviders(tvID: Int, region: String = "US") async throws -> [TMDBWatchProvider] {
+        let urlString = "\(baseURL)/tv/\(tvID)/watch/providers?api_key=\(apiKey)"
+        let data = try await fetchData(urlString: urlString, ttl: detailTTL)
+        let response = try JSONDecoder().decode(TMDBWatchProvidersResponse.self, from: data)
+        return response.results[region]?.allProviders ?? []
+    }
+
     func getTVKeywords(tvID: Int) async throws -> [String] {
         let urlString = "\(baseURL)/tv/\(tvID)/keywords?api_key=\(apiKey)"
         let data = try await fetchData(urlString: urlString, ttl: detailTTL)
@@ -141,6 +183,15 @@ class TMDBService {
         let urlString = "\(baseURL)/search/keyword?api_key=\(apiKey)&query=\(encodedQuery)"
         let data = try await fetchData(urlString: urlString, ttl: searchTTL)
         let response = try JSONDecoder().decode(TMDBKeywordSearchResponse.self, from: data)
+        return response.results
+    }
+
+    // MARK: - Trending
+
+    func getTrendingAll(timeWindow: TMDBTrendingWindow = .day, page: Int = 1) async throws -> [TMDBTrendingItem] {
+        let urlString = "\(baseURL)/trending/all/\(timeWindow.rawValue)?api_key=\(apiKey)&page=\(max(1, page))"
+        let data = try await fetchData(urlString: urlString, ttl: searchTTL)
+        let response = try JSONDecoder().decode(TMDBTrendingResponse.self, from: data)
         return response.results
     }
     
@@ -372,6 +423,114 @@ struct TMDBTVKeywordsResponse: Codable {
 
 struct TMDBKeywordSearchResponse: Codable {
     let results: [TMDBKeyword]
+}
+
+struct TMDBVideosResponse: Codable {
+    let results: [TMDBVideo]
+}
+
+struct TMDBVideo: Codable, Identifiable {
+    let id: String
+    let key: String
+    let name: String
+    let site: String
+    let type: String
+    let official: Bool?
+
+    var youtubeURL: URL? {
+        guard site.lowercased() == "youtube" else { return nil }
+        return URL(string: "https://www.youtube.com/watch?v=\(key)")
+    }
+}
+
+struct TMDBWatchProvidersResponse: Codable {
+    let results: [String: TMDBWatchProviderRegion]
+}
+
+struct TMDBWatchProviderRegion: Codable {
+    let flatrate: [TMDBWatchProvider]?
+    let rent: [TMDBWatchProvider]?
+    let buy: [TMDBWatchProvider]?
+
+    var allProviders: [TMDBWatchProvider] {
+        let merged = (flatrate ?? []) + (rent ?? []) + (buy ?? [])
+        var seen = Set<Int>()
+        return merged.filter { provider in
+            guard !seen.contains(provider.providerID) else { return false }
+            seen.insert(provider.providerID)
+            return true
+        }
+    }
+}
+
+struct TMDBWatchProvider: Codable, Identifiable {
+    let providerID: Int
+    let providerName: String
+    let logoPath: String?
+
+    enum CodingKeys: String, CodingKey {
+        case providerID = "provider_id"
+        case providerName = "provider_name"
+        case logoPath = "logo_path"
+    }
+
+    var id: Int { providerID }
+
+    var logoURL: URL? {
+        guard let logoPath else { return nil }
+        return URL(string: "https://image.tmdb.org/t/p/w92\(logoPath)")
+    }
+}
+
+enum TMDBTrendingWindow: String {
+    case day
+    case week
+}
+
+struct TMDBTrendingResponse: Codable {
+    let results: [TMDBTrendingItem]
+}
+
+struct TMDBTrendingItem: Codable, Identifiable {
+    let id: Int
+    let mediaType: String
+    let title: String?
+    let name: String?
+    let overview: String?
+    let posterPath: String?
+    let releaseDate: String?
+    let firstAirDate: String?
+    let voteAverage: Double?
+    let voteCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, name, overview
+        case mediaType = "media_type"
+        case posterPath = "poster_path"
+        case releaseDate = "release_date"
+        case firstAirDate = "first_air_date"
+        case voteAverage = "vote_average"
+        case voteCount = "vote_count"
+    }
+
+    var resolvedTitle: String {
+        title ?? name ?? "Unknown"
+    }
+
+    var year: Int? {
+        if let releaseDate {
+            return Int(releaseDate.split(separator: "-").first ?? "")
+        }
+        if let firstAirDate {
+            return Int(firstAirDate.split(separator: "-").first ?? "")
+        }
+        return nil
+    }
+
+    var posterURL: URL? {
+        guard let posterPath else { return nil }
+        return URL(string: "https://image.tmdb.org/t/p/w500\(posterPath)")
+    }
 }
 
 // MARK: - Errors

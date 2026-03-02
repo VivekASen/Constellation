@@ -170,6 +170,9 @@ struct MovieDetailSheet: View {
     
     @State private var movieDetail: TMDBMovieDetail?
     @State private var isLoading = true
+    @State private var trailer: TMDBVideo?
+    @State private var watchProviders: [TMDBWatchProvider] = []
+    @State private var similarMovies: [TMDBMovie] = []
     @State private var addStatus: AddStatus = .watchlist
     @State private var watchedDate = Date()
     @State private var notes = ""
@@ -282,6 +285,78 @@ struct MovieDetailSheet: View {
                                 }
                             }
                         }
+
+                        if let trailer, let url = trailer.youtubeURL {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Trailer")
+                                    .font(.headline)
+                                Link(destination: url) {
+                                    Label(trailer.name, systemImage: "play.rectangle.fill")
+                                        .font(.subheadline.weight(.semibold))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 8)
+                                        .background(Color.red.opacity(0.14))
+                                        .foregroundStyle(.red)
+                                        .clipShape(Capsule())
+                                }
+                            }
+                        }
+
+                        if !watchProviders.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Where to Watch (US)")
+                                    .font(.headline)
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 8) {
+                                        ForEach(watchProviders.prefix(10)) { provider in
+                                            HStack(spacing: 6) {
+                                                if let logo = provider.logoURL {
+                                                    AsyncImage(url: logo) { image in
+                                                        image.resizable().scaledToFit()
+                                                    } placeholder: {
+                                                        Color.gray.opacity(0.2)
+                                                    }
+                                                    .frame(width: 16, height: 16)
+                                                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                                                }
+                                                Text(provider.providerName)
+                                                    .font(.caption)
+                                            }
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 6)
+                                            .background(Color.blue.opacity(0.12))
+                                            .clipShape(Capsule())
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if !similarMovies.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Similar Picks")
+                                    .font(.headline)
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 10) {
+                                        ForEach(similarMovies.prefix(8)) { similar in
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                AsyncImage(url: similar.posterURL) { image in
+                                                    image.resizable().aspectRatio(contentMode: .fill)
+                                                } placeholder: {
+                                                    Rectangle().fill(Color.gray.opacity(0.25))
+                                                }
+                                                .frame(width: 95, height: 140)
+                                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                                Text(similar.title)
+                                                    .font(.caption.weight(.semibold))
+                                                    .lineLimit(2)
+                                                    .frame(width: 95, alignment: .leading)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         
                         Divider()
                         
@@ -358,6 +433,19 @@ struct MovieDetailSheet: View {
         do {
             let detail = try await TMDBService.shared.getMovieDetails(id: movie.id)
             movieDetail = detail
+            async let videosTask = TMDBService.shared.getMovieVideos(movieID: movie.id)
+            async let providersTask = TMDBService.shared.getMovieWatchProviders(movieID: movie.id)
+            async let similarTask = TMDBService.shared.getMovieRecommendations(movieID: movie.id)
+
+            if let videos = try? await videosTask {
+                trailer = videos.first(where: { video in
+                    video.site.lowercased() == "youtube" && (video.type == "Trailer" || video.official == true)
+                }) ?? videos.first(where: { $0.site.lowercased() == "youtube" })
+            }
+            watchProviders = (try? await providersTask) ?? []
+            similarMovies = (try? await similarTask)?
+                .filter { $0.voteCount ?? 0 >= 120 }
+                .sorted { ($0.voteAverage ?? 0) > ($1.voteAverage ?? 0) } ?? []
             isLoading = false
         } catch {
             print("Failed to load movie details: \(error)")
@@ -367,7 +455,14 @@ struct MovieDetailSheet: View {
     
     private func addMovie() {
         guard let detail = movieDetail else { return }
-        if existingMovies.contains(where: { $0.tmdbID == detail.id }) {
+        let normalizedTitle = detail.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let duplicateExists = existingMovies.contains { existing in
+            if existing.tmdbID == detail.id { return true }
+            let existingTitle = existing.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let yearMatches = (existing.year == nil || detail.year == nil || existing.year == detail.year)
+            return existingTitle == normalizedTitle && yearMatches
+        }
+        if duplicateExists {
             duplicateMessage = "\"\(detail.title)\" is already in your library."
             showDuplicateAlert = true
             return
