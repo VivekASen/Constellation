@@ -16,6 +16,7 @@ struct DiscoveryView: View {
     @State private var pendingTVForAddFeedback: TMDBTVShow?
     @State private var toastMessage: String?
     @State private var pendingTopicSwitch: String?
+    @State private var rotatingFactIndex = 0
 
     private let starterPrompts = [
         "space exploration",
@@ -23,10 +24,17 @@ struct DiscoveryView: View {
         "historical non-fiction",
         "thoughtful sci fi"
     ]
+    private let rotatingFacts = [
+        "Trivia: The first feature film to win Best Picture was Wings (1927).",
+        "Quote: \"To infinity and beyond.\"",
+        "Trivia: The pilot of The X-Files premiered on September 10, 1993.",
+        "Quote: \"May the Force be with you.\"",
+        "Trivia: Parasite became the first non-English film to win Best Picture.",
+        "Quote: \"I am your father.\""
+    ]
 
-    private let appBlue = Color(red: 0.10, green: 0.43, blue: 0.95)
-    private let surface = Color(uiColor: .secondarySystemBackground)
-    private let pageBackground = Color(uiColor: .systemGroupedBackground)
+    private let appBlue = ConstellationPalette.accent
+    private let surface = ConstellationPalette.surface
 
     private let intentService = ChatIntentService.shared
     private let memoryStore = RecommendationMemoryStore.shared
@@ -34,12 +42,14 @@ struct DiscoveryView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                pageBackground.ignoresSafeArea()
+                ConstellationBackdrop()
+                    .ignoresSafeArea()
 
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
                             assistantBubble("Tell me what you want to watch and I’ll refine with you. I can compare against your library and keep improving suggestions each turn.")
+                            rotatingFactBanner
 
                             if turns.isEmpty {
                                 starterPromptSection
@@ -120,10 +130,10 @@ struct DiscoveryView: View {
                                 HStack(spacing: 8) {
                                     ProgressView()
                                         .progressViewStyle(.circular)
-                                        .tint(.secondary)
+                                        .tint(appBlue)
                                     Text("Updating recommendations...")
                                         .font(.subheadline)
-                                        .foregroundStyle(.secondary)
+                                        .foregroundStyle(Color.white.opacity(0.78))
                                 }
                                 .padding(12)
                                 .background(surface)
@@ -167,6 +177,7 @@ struct DiscoveryView: View {
             }
             .navigationTitle("Discover")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -183,6 +194,9 @@ struct DiscoveryView: View {
             .sheet(item: $showingAddTVShow, onDismiss: handleTVSheetDismiss) { show in
                 TVShowDetailSheet(show: show.show, recommendationContext: show.context)
             }
+            .task {
+                await rotateFactLoop()
+            }
         }
     }
 
@@ -192,11 +206,11 @@ struct DiscoveryView: View {
                 .textFieldStyle(.plain)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
-                .background(Color(uiColor: .systemBackground))
+                .background(ConstellationPalette.surfaceStrong)
                 .clipShape(RoundedRectangle(cornerRadius: 18))
                 .overlay {
                     RoundedRectangle(cornerRadius: 18)
-                        .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                        .stroke(ConstellationPalette.border, lineWidth: 1)
                 }
                 .onSubmit {
                     Task { await submitMessage(draftQuery) }
@@ -216,14 +230,19 @@ struct DiscoveryView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 12)
-        .background(Color(uiColor: .systemGroupedBackground).opacity(0.96))
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.white.opacity(0.12))
+                .frame(height: 0.5)
+        }
     }
 
     private var starterPromptSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Starter prompts")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.white.opacity(0.72))
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -234,11 +253,11 @@ struct DiscoveryView: View {
                         .font(.caption)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .background(Color(uiColor: .systemBackground))
-                        .foregroundStyle(.primary)
+                        .background(ConstellationPalette.surfaceStrong)
+                        .foregroundStyle(Color.black.opacity(0.85))
                         .clipShape(Capsule())
                         .overlay {
-                            Capsule().stroke(Color.black.opacity(0.08), lineWidth: 1)
+                            Capsule().stroke(ConstellationPalette.border, lineWidth: 1)
                         }
                     }
                 }
@@ -247,6 +266,31 @@ struct DiscoveryView: View {
         .padding(12)
         .background(surface)
         .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(ConstellationPalette.border, lineWidth: 1)
+        }
+    }
+
+    private var rotatingFactBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "sparkles")
+                .foregroundStyle(ConstellationPalette.accentSoft)
+            Text(rotatingFacts[rotatingFactIndex])
+                .font(.caption)
+                .foregroundStyle(Color.white.opacity(0.82))
+                .lineLimit(2)
+                .id("fact-\(rotatingFactIndex)")
+                .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color.white.opacity(0.08))
+        .clipShape(Capsule())
+        .overlay {
+            Capsule().stroke(Color.white.opacity(0.18), lineWidth: 1)
+        }
+        .animation(.easeInOut(duration: 0.35), value: rotatingFactIndex)
     }
 
     private func submitMessage(_ rawMessage: String) async {
@@ -401,19 +445,24 @@ struct DiscoveryView: View {
     private func watchlistSection(from result: DiscoveryResult, display: ChatDisplayPreference) -> some View {
         if let highlight = watchlistHighlight(from: result, display: display) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("From your watchlist")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
+                HStack(spacing: 6) {
+                    Image(systemName: "bookmark.circle.fill")
+                        .foregroundStyle(ConstellationPalette.accent)
+                    Text("From your watchlist")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.black.opacity(0.78))
+                        .textCase(.uppercase)
+                }
                 watchlistHighlightCard(highlight)
             }
             .padding(10)
-            .background(surface.opacity(0.8))
+            .background(ConstellationPalette.surfaceStrong)
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .overlay {
                 RoundedRectangle(cornerRadius: 14)
-                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                    .stroke(ConstellationPalette.border, lineWidth: 1)
             }
+            .shadow(color: Color.black.opacity(0.08), radius: 8, y: 4)
         }
     }
 
@@ -523,6 +572,16 @@ struct DiscoveryView: View {
         pendingTopicSwitch = nil
     }
 
+    private func rotateFactLoop() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            if Task.isCancelled { break }
+            withAnimation(.easeInOut(duration: 0.35)) {
+                rotatingFactIndex = (rotatingFactIndex + 1) % rotatingFacts.count
+            }
+        }
+    }
+
     private func shouldConfirmTopicSwitch(_ message: String) -> Bool {
         let normalized = message.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         let confirms: Set<String> = ["switch", "yes", "y", "reset", "new topic", "start over", "go ahead"]
@@ -546,14 +605,14 @@ struct DiscoveryView: View {
         HStack {
             Text(text)
                 .font(.subheadline)
-                .foregroundStyle(.primary)
+                .foregroundStyle(Color.black.opacity(0.86))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(surface)
+                .background(ConstellationPalette.surfaceStrong)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
                 .overlay {
                     RoundedRectangle(cornerRadius: 14)
-                        .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                        .stroke(ConstellationPalette.border, lineWidth: 1)
                 }
             Spacer(minLength: 24)
         }
@@ -570,6 +629,7 @@ struct DiscoveryView: View {
                 .padding(.vertical, 10)
                 .background(appBlue)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
+                .shadow(color: appBlue.opacity(0.28), radius: 8, y: 4)
         }
     }
 
@@ -638,7 +698,7 @@ struct DiscoveryView: View {
                         .font(.caption.weight(.semibold))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(Color(uiColor: .tertiarySystemBackground))
+                        .background(Color.white.opacity(0.72))
                         .foregroundStyle(.secondary)
                         .clipShape(Capsule())
                     }
@@ -648,12 +708,13 @@ struct DiscoveryView: View {
             Spacer(minLength: 0)
         }
         .padding(12)
-        .background(Color(uiColor: .systemBackground))
+        .background(ConstellationPalette.surfaceStrong)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay {
             RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.black.opacity(0.07), lineWidth: 1)
+                .stroke(ConstellationPalette.border, lineWidth: 1)
         }
+        .shadow(color: Color.black.opacity(0.08), radius: 8, y: 4)
         .contentShape(RoundedRectangle(cornerRadius: 14))
         .onTapGesture {
             onTap?()
@@ -670,10 +731,10 @@ struct DiscoveryView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(Color(uiColor: .systemBackground))
+        .background(ConstellationPalette.surfaceStrong)
         .clipShape(Capsule())
         .overlay {
-            Capsule().stroke(Color.black.opacity(0.10), lineWidth: 1)
+            Capsule().stroke(ConstellationPalette.border, lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 4)
     }
@@ -702,6 +763,52 @@ private struct DiscoveryTVSelection: Identifiable {
 private enum WatchlistHighlight {
     case movie(Movie)
     case tv(TVShow)
+}
+
+private struct ConstellationBackdrop: View {
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        ConstellationPalette.deepNavy,
+                        ConstellationPalette.deepIndigo,
+                        ConstellationPalette.cosmicPurple
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+
+                ForEach(0..<60, id: \.self) { index in
+                    Circle()
+                        .fill(Color.white.opacity(starOpacity(index)))
+                        .frame(width: starSize(index), height: starSize(index))
+                        .position(
+                            x: starX(index, width: proxy.size.width),
+                            y: starY(index, height: proxy.size.height)
+                        )
+                }
+            }
+        }
+    }
+
+    private func starX(_ index: Int, width: CGFloat) -> CGFloat {
+        let value = abs(sin(Double(index) * 12.9898 + 5.43))
+        return CGFloat(value) * width
+    }
+
+    private func starY(_ index: Int, height: CGFloat) -> CGFloat {
+        let value = abs(sin(Double(index) * 78.233 + 1.95))
+        return CGFloat(value) * height
+    }
+
+    private func starSize(_ index: Int) -> CGFloat {
+        [1.4, 1.8, 2.2, 2.6][index % 4]
+    }
+
+    private func starOpacity(_ index: Int) -> Double {
+        [0.25, 0.35, 0.45, 0.6][index % 4]
+    }
 }
 
 #Preview {

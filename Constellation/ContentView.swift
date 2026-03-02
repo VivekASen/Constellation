@@ -36,6 +36,7 @@ struct ContentView: View {
                     Label("Settings", systemImage: "gearshape.fill")
                 }
         }
+        .tint(ConstellationPalette.accent)
     }
 }
 
