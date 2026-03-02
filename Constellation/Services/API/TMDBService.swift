@@ -63,6 +63,13 @@ class TMDBService {
         let response = try JSONDecoder().decode(TMDBMovieKeywordsResponse.self, from: data)
         return response.keywords.map(\.name)
     }
+
+    func discoverMovies(keywordID: Int) async throws -> [TMDBMovie] {
+        let urlString = "\(baseURL)/discover/movie?api_key=\(apiKey)&with_keywords=\(keywordID)&sort_by=vote_count.desc&vote_count.gte=60"
+        let data = try await fetchData(urlString: urlString, ttl: popularTTL)
+        let response = try JSONDecoder().decode(TMDBSearchResponse.self, from: data)
+        return response.results
+    }
     
     // MARK: - TV Shows
     
@@ -106,6 +113,21 @@ class TMDBService {
         let data = try await fetchData(urlString: urlString, ttl: detailTTL)
         let response = try JSONDecoder().decode(TMDBTVKeywordsResponse.self, from: data)
         return response.results.map(\.name)
+    }
+
+    func discoverTVShows(keywordID: Int) async throws -> [TMDBTVShow] {
+        let urlString = "\(baseURL)/discover/tv?api_key=\(apiKey)&with_keywords=\(keywordID)&sort_by=vote_count.desc&vote_count.gte=40"
+        let data = try await fetchData(urlString: urlString, ttl: popularTTL)
+        let response = try JSONDecoder().decode(TMDBTVSearchResponse.self, from: data)
+        return response.results
+    }
+
+    func searchKeywords(query: String) async throws -> [TMDBKeyword] {
+        let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let urlString = "\(baseURL)/search/keyword?api_key=\(apiKey)&query=\(encodedQuery)"
+        let data = try await fetchData(urlString: urlString, ttl: searchTTL)
+        let response = try JSONDecoder().decode(TMDBKeywordSearchResponse.self, from: data)
+        return response.results
     }
     
     // MARK: - Shared Request Helper
@@ -331,6 +353,10 @@ struct TMDBMovieKeywordsResponse: Codable {
 
 struct TMDBTVKeywordsResponse: Codable {
     let id: Int
+    let results: [TMDBKeyword]
+}
+
+struct TMDBKeywordSearchResponse: Codable {
     let results: [TMDBKeyword]
 }
 

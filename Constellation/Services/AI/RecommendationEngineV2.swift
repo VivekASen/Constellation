@@ -9,6 +9,7 @@ final class RecommendationEngineV2 {
     private let minimumTVVoteCount = 120
     private let documentaryGenreID = 99
     private let vectorRetriever = LibraryVectorRetriever.shared
+    private let topicKnowledgeService = TopicKnowledgeService.shared
     private let maxCandidateQueries = 12
     private let perQueryTake = 5
     private let targetCandidatePool = 26
@@ -102,23 +103,32 @@ final class RecommendationEngineV2 {
     ) async -> RecommendationResult {
         let intent = parseIntent(from: query)
         let topicConstraint = buildTopicConstraint(query: query, understanding: understanding)
+        let expandedTopicTerms = await topicKnowledgeService.expandTerms(for: query)
         let retrievalSnapshot = vectorRetriever.retrieve(
             query: query,
             understanding: understanding,
             userMovies: userMovies,
             userTVShows: userTVShows
         )
-        let candidateQueries = buildCandidateQueries(query: query, understanding: understanding, topicConstraint: topicConstraint)
+        let candidateQueries = buildCandidateQueries(
+            query: query,
+            understanding: understanding,
+            topicConstraint: topicConstraint,
+            expandedTerms: expandedTopicTerms
+        )
+        let keywordIDs = await resolveKeywordIDs(from: candidateQueries + expandedTopicTerms)
         
         async let movieCandidates = fetchMovieCandidates(
             queries: candidateQueries,
             understanding: understanding,
-            userMovies: userMovies
+            userMovies: userMovies,
+            keywordIDs: keywordIDs
         )
         async let tvCandidates = fetchTVCandidates(
             queries: candidateQueries,
             understanding: understanding,
-            userTVShows: userTVShows
+            userTVShows: userTVShows,
+            keywordIDs: keywordIDs
         )
         let (movieCandidatesResolved, tvCandidatesResolved) = await (movieCandidates, tvCandidates)
         
@@ -175,7 +185,12 @@ final class RecommendationEngineV2 {
     
     // MARK: - Retrieval
     
-    private func buildCandidateQueries(query: String, understanding: QueryUnderstanding, topicConstraint: TopicConstraint) -> [String] {
+    private func buildCandidateQueries(
+        query: String,
+        understanding: QueryUnderstanding,
+        topicConstraint: TopicConstraint,
+        expandedTerms: [String]
+    ) -> [String] {
         var candidates: [String] = []
         let sanitizedQuery = sanitizeQueryForSearch(query)
         if !sanitizedQuery.isEmpty {
@@ -187,6 +202,7 @@ final class RecommendationEngineV2 {
             .compactMap(cleanSuggestion)
             .filter(isConcreteSuggestion)
         candidates.append(contentsOf: cleanSuggestions.prefix(8))
+        candidates.append(contentsOf: expandedTerms.prefix(8))
         
         let topicQueries = (understanding.themes + understanding.genres)
             .map { $0.replacingOccurrences(of: "-", with: " ") }
@@ -214,7 +230,8 @@ final class RecommendationEngineV2 {
     private func fetchMovieCandidates(
         queries: [String],
         understanding: QueryUnderstanding,
-        userMovies: [Movie]
+        userMovies: [Movie],
+        keywordIDs: [Int]
     ) async -> [TMDBMovie] {
         await withTaskGroup(of: [TMDBMovie].self) { group in
             for query in queries {
@@ -230,6 +247,11 @@ final class RecommendationEngineV2 {
             for seedID in topMovieSeedIDs(from: userMovies) {
                 group.addTask {
                     (try? await TMDBService.shared.getSimilarMovies(movieID: seedID)) ?? []
+                }
+            }
+            for keywordID in keywordIDs.prefix(8) {
+                group.addTask {
+                    (try? await TMDBService.shared.discoverMovies(keywordID: keywordID)) ?? []
                 }
             }
             
@@ -253,7 +275,8 @@ final class RecommendationEngineV2 {
     private func fetchTVCandidates(
         queries: [String],
         understanding: QueryUnderstanding,
-        userTVShows: [TVShow]
+        userTVShows: [TVShow],
+        keywordIDs: [Int]
     ) async -> [TMDBTVShow] {
         await withTaskGroup(of: [TMDBTVShow].self) { group in
             for query in queries {
@@ -269,6 +292,11 @@ final class RecommendationEngineV2 {
             for seedID in topTVSeedIDs(from: userTVShows) {
                 group.addTask {
                     (try? await TMDBService.shared.getSimilarTVShows(tvID: seedID)) ?? []
+                }
+            }
+            for keywordID in keywordIDs.prefix(8) {
+                group.addTask {
+                    (try? await TMDBService.shared.discoverTVShows(keywordID: keywordID)) ?? []
                 }
             }
             
@@ -745,11 +773,49 @@ final class RecommendationEngineV2 {
             .map { $0 }
     }
 
+    private func resolveKeywordIDs(from terms: [String]) async -> [Int] {
+        let cleaned = Array(Set(terms.map(Self.normalizeTerm)))
+            .filter { !$0.isEmpty && $0.count >= 3 }
+            .prefix(10)
+
+        let ids = await withTaskGroup(of: Int?.self) { group in
+            for term in cleaned {
+                group.addTask {
+                    let keywords = (try? await TMDBService.shared.searchKeywords(query: term)) ?? []
+                    if let exact = keywords.first(where: { Self.normalizeTerm($0.name) == term }) {
+                        return exact.id
+                    }
+                    if let partial = keywords.first(where: { Self.normalizeTerm($0.name).contains(term) || term.contains(Self.normalizeTerm($0.name)) }) {
+                        return partial.id
+                    }
+                    return keywords.first?.id
+                }
+            }
+            var values: [Int] = []
+            for await id in group {
+                if let id {
+                    values.append(id)
+                }
+            }
+            return values
+        }
+        return Array(Set(ids)).prefix(8).map { $0 }
+    }
+
     private func sanitizeQueryForSearch(_ query: String) -> String {
         query
             .replacingOccurrences(of: "|", with: " ")
             .replacingOccurrences(of: "refine:", with: " ", options: .caseInsensitive)
             .replacingOccurrences(of: "preference:", with: " ", options: .caseInsensitive)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    nonisolated private static func normalizeTerm(_ text: String) -> String {
+        text.lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: #"[^\p{L}\p{N}\s]"#, with: " ", options: .regularExpression)
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
