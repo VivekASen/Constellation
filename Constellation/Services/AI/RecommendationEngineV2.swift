@@ -53,7 +53,9 @@ final class RecommendationEngineV2 {
         query: String,
         understanding: QueryUnderstanding,
         userMovies: [Movie],
-        userTVShows: [TVShow]
+        userTVShows: [TVShow],
+        excludedMovieIDs: Set<Int> = [],
+        excludedTVIDs: Set<Int> = []
     ) async -> RecommendationResult {
         let intent = parseIntent(from: query)
         let expandedTopicTerms = await topicKnowledgeService.expandTerms(for: query)
@@ -91,11 +93,13 @@ final class RecommendationEngineV2 {
         
         var filteredMovies = dedupeMovies(movieCandidatesResolved)
             .filter { !movieLibraryIDs.contains($0.id) }
+            .filter { !excludedMovieIDs.contains($0.id) }
             .filter { ($0.voteCount ?? 0) >= minimumMovieVoteCount || ($0.voteAverage ?? 0) >= 7.9 }
             .filter { satisfiesMovieIntent($0, intent: intent) }
             .filter { satisfiesMovieTopicConstraint($0, topicConstraint: topicConstraint) }
         var filteredTVShows = dedupeTVShows(tvCandidatesResolved)
             .filter { !tvLibraryIDs.contains($0.id) }
+            .filter { !excludedTVIDs.contains($0.id) }
             .filter { ($0.voteCount ?? 0) >= minimumTVVoteCount || ($0.voteAverage ?? 0) >= 8.0 }
             .filter { satisfiesTVIntent($0, intent: intent) }
             .filter { satisfiesTVTopicConstraint($0, topicConstraint: topicConstraint) }
@@ -105,12 +109,14 @@ final class RecommendationEngineV2 {
         if filteredMovies.isEmpty && filteredTVShows.isEmpty && topicConstraint.isActive {
             filteredMovies = dedupeMovies(movieCandidatesResolved)
                 .filter { !movieLibraryIDs.contains($0.id) }
+                .filter { !excludedMovieIDs.contains($0.id) }
                 .filter { ($0.voteCount ?? 0) >= 20 || ($0.voteAverage ?? 0) >= 6.2 }
                 .filter { satisfiesMovieIntent($0, intent: intent) }
                 .filter { satisfiesMovieTopicConstraintRelaxed($0, topicConstraint: topicConstraint) }
 
             filteredTVShows = dedupeTVShows(tvCandidatesResolved)
                 .filter { !tvLibraryIDs.contains($0.id) }
+                .filter { !excludedTVIDs.contains($0.id) }
                 .filter { ($0.voteCount ?? 0) >= 20 || ($0.voteAverage ?? 0) >= 6.2 }
                 .filter { satisfiesTVIntent($0, intent: intent) }
                 .filter { satisfiesTVTopicConstraintRelaxed($0, topicConstraint: topicConstraint) }

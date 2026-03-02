@@ -318,11 +318,15 @@ struct DiscoveryView: View {
         conversationState = intentService.apply(plan: plan, to: conversationState)
         var turn = turns[turnIndex]
         turn.displayPreference = plan.displayPreference
+        let seenMovieIDs = Set(turns.prefix(turnIndex).compactMap(\.result).flatMap { $0.recommendations.map(\.id) })
+        let seenTVIDs = Set(turns.prefix(turnIndex).compactMap(\.result).flatMap { $0.tvRecommendations.map(\.id) })
 
         let discovery = await DiscoveryEngine.shared.discover(
             interest: intentService.effectiveQuery(for: conversationState),
             userMovies: movies,
-            userTVShows: tvShows
+            userTVShows: tvShows,
+            excludedMovieIDs: seenMovieIDs,
+            excludedTVIDs: seenTVIDs
         )
 
         let uniqueDiscovery = dedupeAgainstPreviouslyShown(discovery, currentTurnIndex: turnIndex)

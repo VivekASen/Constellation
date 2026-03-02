@@ -15,7 +15,13 @@ class DiscoveryEngine {
     
     private init() {}
     
-    func discover(interest: String, userMovies: [Movie], userTVShows: [TVShow]) async -> DiscoveryResult {
+    func discover(
+        interest: String,
+        userMovies: [Movie],
+        userTVShows: [TVShow],
+        excludedMovieIDs: Set<Int> = [],
+        excludedTVIDs: Set<Int> = []
+    ) async -> DiscoveryResult {
         let understanding = await understandQuery(interest)
         let preferredMode = preferredMediaMode(from: interest)
         
@@ -23,7 +29,9 @@ class DiscoveryEngine {
             query: interest,
             understanding: understanding,
             userMovies: userMovies,
-            userTVShows: userTVShows
+            userTVShows: userTVShows,
+            excludedMovieIDs: excludedMovieIDs,
+            excludedTVIDs: excludedTVIDs
         )
         
         let movieMatches = findIntelligentMovieMatches(understanding: understanding, in: userMovies)
@@ -32,31 +40,47 @@ class DiscoveryEngine {
         let movieLibraryIDs = Set(userMovies.compactMap(\.tmdbID))
         let tvLibraryIDs = Set(userTVShows.compactMap(\.tmdbID))
 
-        var movieRecommendations = recommendationResult.movies.map(\.movie)
-        var tvRecommendations = recommendationResult.tvShows.map(\.show)
+        var movieRecommendations = recommendationResult.movies.map(\.movie).filter { !excludedMovieIDs.contains($0.id) }
+        var tvRecommendations = recommendationResult.tvShows.map(\.show).filter { !excludedTVIDs.contains($0.id) }
         var movieReasons = Dictionary(
-            uniqueKeysWithValues: recommendationResult.movies.map { ($0.movie.id, $0.reasons.joined(separator: " • ")) }
+            uniqueKeysWithValues: recommendationResult.movies
+                .filter { !excludedMovieIDs.contains($0.movie.id) }
+                .map { ($0.movie.id, $0.reasons.joined(separator: " • ")) }
         )
         var tvReasons = Dictionary(
-            uniqueKeysWithValues: recommendationResult.tvShows.map { ($0.show.id, $0.reasons.joined(separator: " • ")) }
+            uniqueKeysWithValues: recommendationResult.tvShows
+                .filter { !excludedTVIDs.contains($0.show.id) }
+                .map { ($0.show.id, $0.reasons.joined(separator: " • ")) }
         )
         var movieCoherence = Dictionary(
-            uniqueKeysWithValues: recommendationResult.movies.map { ($0.movie.id, $0.coherenceEvidence) }
+            uniqueKeysWithValues: recommendationResult.movies
+                .filter { !excludedMovieIDs.contains($0.movie.id) }
+                .map { ($0.movie.id, $0.coherenceEvidence) }
         )
         var tvCoherence = Dictionary(
-            uniqueKeysWithValues: recommendationResult.tvShows.map { ($0.show.id, $0.coherenceEvidence) }
+            uniqueKeysWithValues: recommendationResult.tvShows
+                .filter { !excludedTVIDs.contains($0.show.id) }
+                .map { ($0.show.id, $0.coherenceEvidence) }
         )
         var movieSemantic = Dictionary(
-            uniqueKeysWithValues: recommendationResult.movies.map { ($0.movie.id, $0.semanticEvidence) }
+            uniqueKeysWithValues: recommendationResult.movies
+                .filter { !excludedMovieIDs.contains($0.movie.id) }
+                .map { ($0.movie.id, $0.semanticEvidence) }
         )
         var tvSemantic = Dictionary(
-            uniqueKeysWithValues: recommendationResult.tvShows.map { ($0.show.id, $0.semanticEvidence) }
+            uniqueKeysWithValues: recommendationResult.tvShows
+                .filter { !excludedTVIDs.contains($0.show.id) }
+                .map { ($0.show.id, $0.semanticEvidence) }
         )
         var movieScore = Dictionary(
-            uniqueKeysWithValues: recommendationResult.movies.map { ($0.movie.id, $0.score) }
+            uniqueKeysWithValues: recommendationResult.movies
+                .filter { !excludedMovieIDs.contains($0.movie.id) }
+                .map { ($0.movie.id, $0.score) }
         )
         var tvScore = Dictionary(
-            uniqueKeysWithValues: recommendationResult.tvShows.map { ($0.show.id, $0.score) }
+            uniqueKeysWithValues: recommendationResult.tvShows
+                .filter { !excludedTVIDs.contains($0.show.id) }
+                .map { ($0.show.id, $0.score) }
         )
 
         switch preferredMode {
@@ -65,6 +89,7 @@ class DiscoveryEngine {
                 for movie in popularMovies {
                     guard movieRecommendations.count < 2 else { break }
                     guard !movieLibraryIDs.contains(movie.id) else { continue }
+                    guard !excludedMovieIDs.contains(movie.id) else { continue }
                     guard !movieRecommendations.contains(where: { $0.id == movie.id }) else { continue }
                     movieRecommendations.append(movie)
                     movieReasons[movie.id] = "Popular recommendation related to your search"
@@ -78,6 +103,7 @@ class DiscoveryEngine {
                 for show in popularTV {
                     guard tvRecommendations.count < 2 else { break }
                     guard !tvLibraryIDs.contains(show.id) else { continue }
+                    guard !excludedTVIDs.contains(show.id) else { continue }
                     guard !tvRecommendations.contains(where: { $0.id == show.id }) else { continue }
                     tvRecommendations.append(show)
                     tvReasons[show.id] = "Popular recommendation related to your search"
@@ -92,6 +118,7 @@ class DiscoveryEngine {
                     for movie in popularMovies {
                         guard movieRecommendations.count + tvRecommendations.count < 2 else { break }
                         guard !movieLibraryIDs.contains(movie.id) else { continue }
+                        guard !excludedMovieIDs.contains(movie.id) else { continue }
                         guard !movieRecommendations.contains(where: { $0.id == movie.id }) else { continue }
                         movieRecommendations.append(movie)
                         movieReasons[movie.id] = "Popular recommendation related to your search"
@@ -106,6 +133,7 @@ class DiscoveryEngine {
                     for show in popularTV {
                         guard movieRecommendations.count + tvRecommendations.count < 2 else { break }
                         guard !tvLibraryIDs.contains(show.id) else { continue }
+                        guard !excludedTVIDs.contains(show.id) else { continue }
                         guard !tvRecommendations.contains(where: { $0.id == show.id }) else { continue }
                         tvRecommendations.append(show)
                         tvReasons[show.id] = "Popular recommendation related to your search"
