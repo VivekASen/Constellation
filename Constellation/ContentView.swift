@@ -15,11 +15,6 @@ struct ContentView: View {
                 .tabItem {
                     Label("Home", systemImage: "house.fill")
                 }
-            
-            DiscoveryView()
-                .tabItem {
-                    Label("Discover", systemImage: "sparkles")
-                }
 
             LibraryView()
                 .tabItem {
