@@ -568,7 +568,7 @@ final class TasteDiveService {
 
     func similar(
         query: String,
-        type: TasteDiveMediaType? = nil,
+        type: TasteDiveMediaType,
         limit: Int = 8
     ) async throws -> [TasteDiveResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -583,12 +583,10 @@ final class TasteDiveService {
         components?.queryItems = [
             URLQueryItem(name: "q", value: trimmed),
             URLQueryItem(name: "k", value: apiKey),
+            URLQueryItem(name: "type", value: type.rawValue),
             URLQueryItem(name: "info", value: "1"),
             URLQueryItem(name: "limit", value: String(max(1, min(limit, 20))))
         ]
-        if let type {
-            components?.queryItems?.append(URLQueryItem(name: "type", value: type.rawValue))
-        }
 
         guard let url = components?.url else {
             throw TasteDiveError.invalidURL
@@ -612,8 +610,15 @@ final class TasteDiveService {
 }
 
 enum TasteDiveMediaType: String {
-    case movies
-    case shows
+    case movie
+    case show
+    case book
+    case music
+    case podcast
+    case game
+    case person
+    case place
+    case brand
 }
 
 private struct TasteDiveEnvelope: Codable {

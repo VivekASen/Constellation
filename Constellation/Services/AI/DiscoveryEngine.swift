@@ -354,18 +354,19 @@ class DiscoveryEngine {
 
         var rawTasteResults: [TasteDiveResult] = []
         for seed in seedQueries.prefix(2) {
-            let typeHint: TasteDiveMediaType?
             switch preferredMode {
             case .movieOnly:
-                typeHint = .movies
+                let results = (try? await TasteDiveService.shared.similar(query: seed, type: .movie, limit: 10)) ?? []
+                rawTasteResults.append(contentsOf: results)
             case .tvOnly:
-                typeHint = .shows
+                let results = (try? await TasteDiveService.shared.similar(query: seed, type: .show, limit: 10)) ?? []
+                rawTasteResults.append(contentsOf: results)
             case .any:
-                typeHint = nil
+                let movieResults = (try? await TasteDiveService.shared.similar(query: seed, type: .movie, limit: 8)) ?? []
+                let showResults = (try? await TasteDiveService.shared.similar(query: seed, type: .show, limit: 8)) ?? []
+                rawTasteResults.append(contentsOf: movieResults)
+                rawTasteResults.append(contentsOf: showResults)
             }
-
-            let results = (try? await TasteDiveService.shared.similar(query: seed, type: typeHint, limit: 10)) ?? []
-            rawTasteResults.append(contentsOf: results)
         }
 
         let dedupedTaste = dedupeTasteResults(rawTasteResults)
@@ -438,18 +439,19 @@ class DiscoveryEngine {
 
         var rawTasteResults: [TasteDiveResult] = []
         for seed in seedQueries.prefix(2) {
-            let typeHint: TasteDiveMediaType?
             switch preferredMode {
             case .movieOnly:
-                typeHint = .movies
+                let results = (try? await TasteDiveService.shared.similar(query: seed, type: .movie, limit: 10)) ?? []
+                rawTasteResults.append(contentsOf: results)
             case .tvOnly:
-                typeHint = .shows
+                let results = (try? await TasteDiveService.shared.similar(query: seed, type: .show, limit: 10)) ?? []
+                rawTasteResults.append(contentsOf: results)
             case .any:
-                typeHint = nil
+                let movieResults = (try? await TasteDiveService.shared.similar(query: seed, type: .movie, limit: 8)) ?? []
+                let showResults = (try? await TasteDiveService.shared.similar(query: seed, type: .show, limit: 8)) ?? []
+                rawTasteResults.append(contentsOf: movieResults)
+                rawTasteResults.append(contentsOf: showResults)
             }
-
-            let results = (try? await TasteDiveService.shared.similar(query: seed, type: typeHint, limit: 10)) ?? []
-            rawTasteResults.append(contentsOf: results)
         }
 
         let dedupedTaste = dedupeTasteResults(rawTasteResults)

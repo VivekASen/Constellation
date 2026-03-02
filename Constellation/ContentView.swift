@@ -322,7 +322,9 @@ struct HomeView: View {
         let seedTitles = Array(NSOrderedSet(array: movieSeedTitles + tvSeedTitles)) as? [String] ?? []
 
         for seedTitle in seedTitles {
-            let tasteResults = (try? await TasteDiveService.shared.similar(query: seedTitle, limit: 8)) ?? []
+            let movieResults = (try? await TasteDiveService.shared.similar(query: seedTitle, type: .movie, limit: 6)) ?? []
+            let showResults = (try? await TasteDiveService.shared.similar(query: seedTitle, type: .show, limit: 6)) ?? []
+            let tasteResults = movieResults + showResults
             for tasteResult in tasteResults.prefix(6) {
                 let mediaHint = parseTasteDiveMediaType(tasteResult.type)
                 switch mediaHint {
