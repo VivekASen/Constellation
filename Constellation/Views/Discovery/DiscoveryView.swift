@@ -63,6 +63,7 @@ struct DiscoveryView: View {
                                             title: movie.title,
                                             subtitle: mediaSubtitle(year: movie.year, rating: movie.voteAverage),
                                             reason: result.movieRecommendationReasons[movie.id] ?? "Strong fit for your request",
+                                            sourceLabel: movieSourceLabel(for: movie, in: result),
                                             posterURL: movie.posterURL,
                                             emoji: "🎬",
                                             actionTitle: isAdded ? "Added" : "Add Movie",
@@ -92,6 +93,7 @@ struct DiscoveryView: View {
                                             title: show.title,
                                             subtitle: mediaSubtitle(year: show.year, rating: show.voteAverage),
                                             reason: result.tvRecommendationReasons[show.id] ?? "Strong fit for your request",
+                                            sourceLabel: tvSourceLabel(for: show, in: result),
                                             posterURL: show.posterURL,
                                             emoji: "📺",
                                             actionTitle: isAdded ? "Added" : "Add TV Show",
@@ -476,6 +478,7 @@ struct DiscoveryView: View {
                 title: movie.title,
                 subtitle: mediaSubtitle(year: movie.year, rating: movie.rating),
                 reason: "Already on your watchlist and related to this topic",
+                sourceLabel: "Watchlist",
                 posterURL: URL(string: movie.posterURL ?? ""),
                 emoji: "🎬",
                 actionTitle: "On your list",
@@ -490,6 +493,7 @@ struct DiscoveryView: View {
                 title: show.title,
                 subtitle: mediaSubtitle(year: show.year, rating: show.rating),
                 reason: "Already on your watchlist and related to this topic",
+                sourceLabel: "Watchlist",
                 posterURL: URL(string: show.posterURL ?? ""),
                 emoji: "📺",
                 actionTitle: "On your list",
@@ -630,6 +634,7 @@ struct DiscoveryView: View {
         title: String,
         subtitle: String,
         reason: String,
+        sourceLabel: String?,
         posterURL: URL?,
         emoji: String,
         actionTitle: String?,
@@ -664,6 +669,16 @@ struct DiscoveryView: View {
                 Text(subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if let sourceLabel {
+                    Text(sourceLabel)
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(sourceLabel == "TasteDive" ? Color.blue.opacity(0.15) : Color.gray.opacity(0.14))
+                        .foregroundStyle(sourceLabel == "TasteDive" ? Color.blue : .secondary)
+                        .clipShape(Capsule())
+                }
 
                 Text(reason)
                     .font(.caption)
@@ -711,6 +726,16 @@ struct DiscoveryView: View {
         .onTapGesture {
             onTap?()
         }
+    }
+
+    private func movieSourceLabel(for movie: TMDBMovie, in result: DiscoveryResult) -> String {
+        let reason = result.movieRecommendationReasons[movie.id]?.lowercased() ?? ""
+        return reason.contains("taste graph") ? "TasteDive" : "Fallback"
+    }
+
+    private func tvSourceLabel(for show: TMDBTVShow, in result: DiscoveryResult) -> String {
+        let reason = result.tvRecommendationReasons[show.id]?.lowercased() ?? ""
+        return reason.contains("taste graph") ? "TasteDive" : "Fallback"
     }
 
     private func toastView(text: String) -> some View {
