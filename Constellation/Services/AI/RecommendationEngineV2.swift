@@ -11,8 +11,8 @@ final class RecommendationEngineV2 {
     private let vectorRetriever = LibraryVectorRetriever.shared
     private let topicKnowledgeService = TopicKnowledgeService.shared
     private let maxCandidateQueries = 12
-    private let perQueryTake = 5
-    private let targetCandidatePool = 26
+    private let perQueryTake = 8
+    private let targetCandidatePool = 80
     private let popularFallbackThreshold = 10
     
     private let seedCatalog: [String: [String]] = [
@@ -203,23 +203,34 @@ final class RecommendationEngineV2 {
     ) async -> [TMDBMovie] {
         await withTaskGroup(of: [TMDBMovie].self) { group in
             for query in queries {
-                group.addTask {
-                    (try? await TMDBService.shared.searchMovies(query: query)) ?? []
+                for page in 1...2 {
+                    group.addTask {
+                        (try? await TMDBService.shared.searchMovies(query: query, page: page)) ?? []
+                    }
                 }
             }
             for genreID in movieGenreIDs(from: understanding) {
-                group.addTask {
-                    (try? await TMDBService.shared.discoverMovies(genreID: genreID)) ?? []
+                for page in 1...2 {
+                    group.addTask {
+                        (try? await TMDBService.shared.discoverMovies(genreID: genreID, page: page)) ?? []
+                    }
                 }
             }
             for seedID in topMovieSeedIDs(from: userMovies) {
-                group.addTask {
-                    (try? await TMDBService.shared.getSimilarMovies(movieID: seedID)) ?? []
+                for page in 1...2 {
+                    group.addTask {
+                        (try? await TMDBService.shared.getSimilarMovies(movieID: seedID, page: page)) ?? []
+                    }
+                    group.addTask {
+                        (try? await TMDBService.shared.getMovieRecommendations(movieID: seedID, page: page)) ?? []
+                    }
                 }
             }
             for keywordID in keywordIDs.prefix(8) {
-                group.addTask {
-                    (try? await TMDBService.shared.discoverMovies(keywordID: keywordID)) ?? []
+                for page in 1...2 {
+                    group.addTask {
+                        (try? await TMDBService.shared.discoverMovies(keywordID: keywordID, page: page)) ?? []
+                    }
                 }
             }
             
@@ -232,8 +243,12 @@ final class RecommendationEngineV2 {
                 }
             }
             
-            if results.count < popularFallbackThreshold, let popular = try? await TMDBService.shared.getPopularMovies() {
-                results.append(contentsOf: popular.prefix(12))
+            if results.count < popularFallbackThreshold {
+                for page in 1...2 {
+                    if let popular = try? await TMDBService.shared.getPopularMovies(page: page) {
+                        results.append(contentsOf: popular.prefix(12))
+                    }
+                }
             }
             
             return results
@@ -248,23 +263,34 @@ final class RecommendationEngineV2 {
     ) async -> [TMDBTVShow] {
         await withTaskGroup(of: [TMDBTVShow].self) { group in
             for query in queries {
-                group.addTask {
-                    (try? await TMDBService.shared.searchTVShows(query: query)) ?? []
+                for page in 1...2 {
+                    group.addTask {
+                        (try? await TMDBService.shared.searchTVShows(query: query, page: page)) ?? []
+                    }
                 }
             }
             for genreID in tvGenreIDs(from: understanding) {
-                group.addTask {
-                    (try? await TMDBService.shared.discoverTVShows(genreID: genreID)) ?? []
+                for page in 1...2 {
+                    group.addTask {
+                        (try? await TMDBService.shared.discoverTVShows(genreID: genreID, page: page)) ?? []
+                    }
                 }
             }
             for seedID in topTVSeedIDs(from: userTVShows) {
-                group.addTask {
-                    (try? await TMDBService.shared.getSimilarTVShows(tvID: seedID)) ?? []
+                for page in 1...2 {
+                    group.addTask {
+                        (try? await TMDBService.shared.getSimilarTVShows(tvID: seedID, page: page)) ?? []
+                    }
+                    group.addTask {
+                        (try? await TMDBService.shared.getTVRecommendations(tvID: seedID, page: page)) ?? []
+                    }
                 }
             }
             for keywordID in keywordIDs.prefix(8) {
-                group.addTask {
-                    (try? await TMDBService.shared.discoverTVShows(keywordID: keywordID)) ?? []
+                for page in 1...2 {
+                    group.addTask {
+                        (try? await TMDBService.shared.discoverTVShows(keywordID: keywordID, page: page)) ?? []
+                    }
                 }
             }
             
@@ -277,8 +303,12 @@ final class RecommendationEngineV2 {
                 }
             }
             
-            if results.count < popularFallbackThreshold, let popular = try? await TMDBService.shared.getPopularTVShows() {
-                results.append(contentsOf: popular.prefix(12))
+            if results.count < popularFallbackThreshold {
+                for page in 1...2 {
+                    if let popular = try? await TMDBService.shared.getPopularTVShows(page: page) {
+                        results.append(contentsOf: popular.prefix(12))
+                    }
+                }
             }
             
             return results
