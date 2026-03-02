@@ -11,6 +11,7 @@ import SwiftData
 class DiscoveryEngine {
     static let shared = DiscoveryEngine()
     private let recommendationEngine = RecommendationEngineV2.shared
+    private let deterministicUnderstanding = DeterministicQueryUnderstandingEngine.shared
     
     private init() {}
     
@@ -72,29 +73,9 @@ class DiscoveryEngine {
     }
     
     private func understandQuery(_ query: String) async -> QueryUnderstanding {
-        let prompt = """
-        A user searched for: "\(query)"
-        
-        Analyze what they are looking for. Return a JSON object with:
-        {
-          "themes": ["theme1", "theme2"],
-          "genres": ["genre1", "genre2"],
-          "mood": "description of mood/vibe",
-          "isGenre": true/false,
-          "suggestions": ["popular example 1", "example 2", "example 3"]
-        }
-        
-        JSON:
-        """
-        
-        do {
-            let response = try await callOllamaForJSON(prompt: prompt)
-            let parsed = parseUnderstanding(response)
-            return enrichUnderstanding(parsed, for: query)
-        } catch {
-            print("Understanding error: \(error)")
-            return fallbackUnderstanding(for: query)
-        }
+        // Deterministic local parsing keeps discovery fast and free on phone.
+        let parsed = deterministicUnderstanding.understand(query)
+        return enrichUnderstanding(parsed, for: query)
     }
     
     private func findIntelligentMovieMatches(
@@ -265,49 +246,6 @@ class DiscoveryEngine {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
-    private func callOllamaForJSON(prompt: String) async throws -> String {
-        let url = URL(string: "http://localhost:11434/api/generate")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        let body: [String: Any] = [
-            "model": "llama3.2",
-            "prompt": prompt,
-            "stream": false,
-            "format": "json"
-        ]
-        
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, _) = try await URLSession.shared.data(for: request)
-        let result = try JSONDecoder().decode(OllamaResponse.self, from: data)
-        return result.response
-    }
-    
-    private func parseUnderstanding(_ json: String) -> QueryUnderstanding {
-        let jsonBody = extractJSONObject(from: json)
-        guard let data = jsonBody.data(using: .utf8),
-              let parsed = try? JSONDecoder().decode(UnderstandingJSON.self, from: data) else {
-            return QueryUnderstanding(themes: [], genres: [], mood: "", isGenre: false, suggestions: [])
-        }
-        
-        return QueryUnderstanding(
-            themes: ThemeExtractor.shared.normalizeThemes(parsed.themes),
-            genres: parsed.genres.map(normalizeForCompare),
-            mood: parsed.mood,
-            isGenre: parsed.isGenre,
-            suggestions: parsed.suggestions
-        )
-    }
-    
-    private func extractJSONObject(from text: String) -> String {
-        guard let start = text.firstIndex(of: "{"),
-              let end = text.lastIndex(of: "}") else {
-            return text
-        }
-        return String(text[start...end])
-    }
-    
     private func fallbackUnderstanding(for query: String) -> QueryUnderstanding {
         let normalized = normalizeForCompare(query)
         let themes = ThemeExtractor.shared.normalizeThemes([normalized])
@@ -404,8 +342,4 @@ struct Connection {
     let from: String
     let to: String
     let reason: String
-}
-
-struct OllamaResponse: Codable {
-    let response: String
 }

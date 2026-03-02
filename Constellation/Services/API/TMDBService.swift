@@ -42,6 +42,20 @@ class TMDBService {
         let response = try JSONDecoder().decode(TMDBSearchResponse.self, from: data)
         return response.results
     }
+
+    func discoverMovies(genreID: Int) async throws -> [TMDBMovie] {
+        let urlString = "\(baseURL)/discover/movie?api_key=\(apiKey)&with_genres=\(genreID)&sort_by=vote_count.desc&vote_count.gte=200"
+        let data = try await fetchData(urlString: urlString, ttl: popularTTL)
+        let response = try JSONDecoder().decode(TMDBSearchResponse.self, from: data)
+        return response.results
+    }
+
+    func getSimilarMovies(movieID: Int) async throws -> [TMDBMovie] {
+        let urlString = "\(baseURL)/movie/\(movieID)/similar?api_key=\(apiKey)"
+        let data = try await fetchData(urlString: urlString, ttl: searchTTL)
+        let response = try JSONDecoder().decode(TMDBSearchResponse.self, from: data)
+        return response.results
+    }
     
     // MARK: - TV Shows
     
@@ -62,6 +76,20 @@ class TMDBService {
     func getPopularTVShows() async throws -> [TMDBTVShow] {
         let urlString = "\(baseURL)/tv/popular?api_key=\(apiKey)"
         let data = try await fetchData(urlString: urlString, ttl: popularTTL)
+        let response = try JSONDecoder().decode(TMDBTVSearchResponse.self, from: data)
+        return response.results
+    }
+
+    func discoverTVShows(genreID: Int) async throws -> [TMDBTVShow] {
+        let urlString = "\(baseURL)/discover/tv?api_key=\(apiKey)&with_genres=\(genreID)&sort_by=vote_count.desc&vote_count.gte=150"
+        let data = try await fetchData(urlString: urlString, ttl: popularTTL)
+        let response = try JSONDecoder().decode(TMDBTVSearchResponse.self, from: data)
+        return response.results
+    }
+
+    func getSimilarTVShows(tvID: Int) async throws -> [TMDBTVShow] {
+        let urlString = "\(baseURL)/tv/\(tvID)/similar?api_key=\(apiKey)"
+        let data = try await fetchData(urlString: urlString, ttl: searchTTL)
         let response = try JSONDecoder().decode(TMDBTVSearchResponse.self, from: data)
         return response.results
     }

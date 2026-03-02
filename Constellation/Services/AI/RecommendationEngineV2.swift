@@ -110,8 +110,16 @@ final class RecommendationEngineV2 {
         )
         let candidateQueries = buildCandidateQueries(query: query, understanding: understanding, topicConstraint: topicConstraint)
         
-        async let movieCandidates = fetchMovieCandidates(queries: candidateQueries)
-        async let tvCandidates = fetchTVCandidates(queries: candidateQueries)
+        async let movieCandidates = fetchMovieCandidates(
+            queries: candidateQueries,
+            understanding: understanding,
+            userMovies: userMovies
+        )
+        async let tvCandidates = fetchTVCandidates(
+            queries: candidateQueries,
+            understanding: understanding,
+            userTVShows: userTVShows
+        )
         let (movieCandidatesResolved, tvCandidatesResolved) = await (movieCandidates, tvCandidates)
         
         let movieLibraryIDs = Set(userMovies.compactMap(\.tmdbID))
@@ -203,11 +211,25 @@ final class RecommendationEngineV2 {
         return Array(deduped.prefix(maxCandidateQueries))
     }
     
-    private func fetchMovieCandidates(queries: [String]) async -> [TMDBMovie] {
+    private func fetchMovieCandidates(
+        queries: [String],
+        understanding: QueryUnderstanding,
+        userMovies: [Movie]
+    ) async -> [TMDBMovie] {
         await withTaskGroup(of: [TMDBMovie].self) { group in
             for query in queries {
                 group.addTask {
                     (try? await TMDBService.shared.searchMovies(query: query)) ?? []
+                }
+            }
+            for genreID in movieGenreIDs(from: understanding) {
+                group.addTask {
+                    (try? await TMDBService.shared.discoverMovies(genreID: genreID)) ?? []
+                }
+            }
+            for seedID in topMovieSeedIDs(from: userMovies) {
+                group.addTask {
+                    (try? await TMDBService.shared.getSimilarMovies(movieID: seedID)) ?? []
                 }
             }
             
@@ -228,11 +250,25 @@ final class RecommendationEngineV2 {
         }
     }
     
-    private func fetchTVCandidates(queries: [String]) async -> [TMDBTVShow] {
+    private func fetchTVCandidates(
+        queries: [String],
+        understanding: QueryUnderstanding,
+        userTVShows: [TVShow]
+    ) async -> [TMDBTVShow] {
         await withTaskGroup(of: [TMDBTVShow].self) { group in
             for query in queries {
                 group.addTask {
                     (try? await TMDBService.shared.searchTVShows(query: query)) ?? []
+                }
+            }
+            for genreID in tvGenreIDs(from: understanding) {
+                group.addTask {
+                    (try? await TMDBService.shared.discoverTVShows(genreID: genreID)) ?? []
+                }
+            }
+            for seedID in topTVSeedIDs(from: userTVShows) {
+                group.addTask {
+                    (try? await TMDBService.shared.getSimilarTVShows(tvID: seedID)) ?? []
                 }
             }
             
@@ -647,6 +683,66 @@ final class RecommendationEngineV2 {
             .joined(separator: " ")
         let raw = tokenize(candidateText)
         return raw.filter { !intentStopTokens.contains($0) }
+    }
+
+    private func movieGenreIDs(from understanding: QueryUnderstanding) -> [Int] {
+        let movieGenreMap: [String: Int] = [
+            "action": 28,
+            "adventure": 12,
+            "animation": 16,
+            "comedy": 35,
+            "crime": 80,
+            "documentary": 99,
+            "drama": 18,
+            "family": 10751,
+            "fantasy": 14,
+            "history": 36,
+            "horror": 27,
+            "mystery": 9648,
+            "romance": 10749,
+            "science fiction": 878,
+            "thriller": 53,
+            "war": 10752
+        ]
+        return Array(Set(understanding.genres.compactMap { movieGenreMap[normalize($0)] })).prefix(3).map { $0 }
+    }
+
+    private func tvGenreIDs(from understanding: QueryUnderstanding) -> [Int] {
+        let tvGenreMap: [String: Int] = [
+            "action": 10759,
+            "adventure": 10759,
+            "animation": 16,
+            "comedy": 35,
+            "crime": 80,
+            "documentary": 99,
+            "drama": 18,
+            "family": 10751,
+            "fantasy": 10765,
+            "history": 36,
+            "horror": 27,
+            "mystery": 9648,
+            "romance": 10749,
+            "science fiction": 10765,
+            "thriller": 53,
+            "war": 10768
+        ]
+        return Array(Set(understanding.genres.compactMap { tvGenreMap[normalize($0)] })).prefix(3).map { $0 }
+    }
+
+    private func topMovieSeedIDs(from movies: [Movie]) -> [Int] {
+        movies
+            .sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
+            .compactMap(\.tmdbID)
+            .prefix(3)
+            .map { $0 }
+    }
+
+    private func topTVSeedIDs(from shows: [TVShow]) -> [Int] {
+        shows
+            .sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
+            .compactMap(\.tmdbID)
+            .prefix(3)
+            .map { $0 }
     }
 
     private func sanitizeQueryForSearch(_ query: String) -> String {
