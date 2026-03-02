@@ -621,29 +621,73 @@ enum TasteDiveMediaType: String {
     case brand
 }
 
-private struct TasteDiveEnvelope: Codable {
+private struct TasteDiveEnvelope: Decodable {
     let similar: TasteDiveSimilar
 
     enum CodingKeys: String, CodingKey {
-        case similar = "Similar"
+        case similar
+        case similarUpper = "Similar"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let lower = try container.decodeIfPresent(TasteDiveSimilar.self, forKey: .similar) {
+            similar = lower
+            return
+        }
+        if let upper = try container.decodeIfPresent(TasteDiveSimilar.self, forKey: .similarUpper) {
+            similar = upper
+            return
+        }
+        throw DecodingError.keyNotFound(
+            CodingKeys.similar,
+            DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Missing similar key")
+        )
     }
 }
 
-private struct TasteDiveSimilar: Codable {
+private struct TasteDiveSimilar: Decodable {
     let results: [TasteDiveResult]
 
     enum CodingKeys: String, CodingKey {
-        case results = "Results"
+        case results
+        case resultsUpper = "Results"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let lower = try container.decodeIfPresent([TasteDiveResult].self, forKey: .results) {
+            results = lower
+            return
+        }
+        if let upper = try container.decodeIfPresent([TasteDiveResult].self, forKey: .resultsUpper) {
+            results = upper
+            return
+        }
+        results = []
     }
 }
 
-struct TasteDiveResult: Codable, Identifiable {
+struct TasteDiveResult: Decodable, Identifiable {
     let name: String
     let type: String?
 
     enum CodingKeys: String, CodingKey {
-        case name = "Name"
-        case type = "Type"
+        case name
+        case nameUpper = "Name"
+        case type
+        case typeUpper = "Type"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let lowerName = try container.decodeIfPresent(String.self, forKey: .name)
+        let upperName = try container.decodeIfPresent(String.self, forKey: .nameUpper)
+        name = lowerName ?? upperName ?? ""
+
+        let lowerType = try container.decodeIfPresent(String.self, forKey: .type)
+        let upperType = try container.decodeIfPresent(String.self, forKey: .typeUpper)
+        type = lowerType ?? upperType
     }
 
     var id: String { "\(type ?? "unknown")-\(name.lowercased())" }
