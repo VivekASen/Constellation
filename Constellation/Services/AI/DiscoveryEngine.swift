@@ -10,9 +10,7 @@ import SwiftData
 
 class DiscoveryEngine {
     static let shared = DiscoveryEngine()
-    private let recommendationEngine = RecommendationEngineV2.shared
     private let deterministicUnderstanding = DeterministicQueryUnderstandingEngine.shared
-    private let minimumSuggestionCount = 4
     
     private init() {}
     
@@ -26,194 +24,45 @@ class DiscoveryEngine {
         let understanding = await understandQuery(interest)
         let preferredMode = preferredMediaMode(from: interest)
         
-        let recommendationResult = await recommendationEngine.recommend(
-            query: interest,
-            understanding: understanding,
-            userMovies: userMovies,
-            userTVShows: userTVShows,
-            excludedMovieIDs: excludedMovieIDs,
-            excludedTVIDs: excludedTVIDs
-        )
-        let tasteBoost = await fetchTasteDiveCandidates(
-            interest: interest,
-            understanding: understanding,
-            preferredMode: preferredMode
-        )
-        
         let movieMatches = findIntelligentMovieMatches(understanding: understanding, in: userMovies)
         let tvMatches = findIntelligentTVMatches(understanding: understanding, in: userTVShows)
 
         let movieLibraryIDs = Set(userMovies.compactMap(\.tmdbID))
         let tvLibraryIDs = Set(userTVShows.compactMap(\.tmdbID))
 
-        var movieRecommendations = recommendationResult.movies.map(\.movie).filter { !excludedMovieIDs.contains($0.id) }
-        var tvRecommendations = recommendationResult.tvShows.map(\.show).filter { !excludedTVIDs.contains($0.id) }
-        var movieReasons = Dictionary(
-            uniqueKeysWithValues: recommendationResult.movies
-                .filter { !excludedMovieIDs.contains($0.movie.id) }
-                .map { ($0.movie.id, $0.reasons.joined(separator: " • ")) }
-        )
-        var tvReasons = Dictionary(
-            uniqueKeysWithValues: recommendationResult.tvShows
-                .filter { !excludedTVIDs.contains($0.show.id) }
-                .map { ($0.show.id, $0.reasons.joined(separator: " • ")) }
-        )
-        var movieCoherence = Dictionary(
-            uniqueKeysWithValues: recommendationResult.movies
-                .filter { !excludedMovieIDs.contains($0.movie.id) }
-                .map { ($0.movie.id, $0.coherenceEvidence) }
-        )
-        var tvCoherence = Dictionary(
-            uniqueKeysWithValues: recommendationResult.tvShows
-                .filter { !excludedTVIDs.contains($0.show.id) }
-                .map { ($0.show.id, $0.coherenceEvidence) }
-        )
-        var movieSemantic = Dictionary(
-            uniqueKeysWithValues: recommendationResult.movies
-                .filter { !excludedMovieIDs.contains($0.movie.id) }
-                .map { ($0.movie.id, $0.semanticEvidence) }
-        )
-        var tvSemantic = Dictionary(
-            uniqueKeysWithValues: recommendationResult.tvShows
-                .filter { !excludedTVIDs.contains($0.show.id) }
-                .map { ($0.show.id, $0.semanticEvidence) }
-        )
-        var movieScore = Dictionary(
-            uniqueKeysWithValues: recommendationResult.movies
-                .filter { !excludedMovieIDs.contains($0.movie.id) }
-                .map { ($0.movie.id, $0.score) }
-        )
-        var tvScore = Dictionary(
-            uniqueKeysWithValues: recommendationResult.tvShows
-                .filter { !excludedTVIDs.contains($0.show.id) }
-                .map { ($0.show.id, $0.score) }
-        )
-
         let strictTaste = await fetchTasteDiveCandidatesStrict(
             interest: interest,
             understanding: understanding,
             preferredMode: preferredMode
         )
-
-        // In strict TasteDive mode, use TasteDive-driven picks directly and avoid
-        // mixing in broader fallback cards that can drift off-topic.
-        if !strictTaste.movies.isEmpty || !strictTaste.tvShows.isEmpty {
-            movieRecommendations = strictTaste.movies.map(\.movie)
-                .filter { !movieLibraryIDs.contains($0.id) && !excludedMovieIDs.contains($0.id) }
-            tvRecommendations = strictTaste.tvShows.map(\.show)
-                .filter { !tvLibraryIDs.contains($0.id) && !excludedTVIDs.contains($0.id) }
-
-            movieReasons = Dictionary(
-                uniqueKeysWithValues: strictTaste.movies.map { ($0.movie.id, $0.reason) }
-            )
-            tvReasons = Dictionary(
-                uniqueKeysWithValues: strictTaste.tvShows.map { ($0.show.id, $0.reason) }
-            )
-            movieCoherence = Dictionary(
-                uniqueKeysWithValues: strictTaste.movies.map { ($0.movie.id, $0.coherence) }
-            )
-            tvCoherence = Dictionary(
-                uniqueKeysWithValues: strictTaste.tvShows.map { ($0.show.id, $0.coherence) }
-            )
-            movieSemantic = Dictionary(
-                uniqueKeysWithValues: strictTaste.movies.map { ($0.movie.id, $0.semantic) }
-            )
-            tvSemantic = Dictionary(
-                uniqueKeysWithValues: strictTaste.tvShows.map { ($0.show.id, $0.semantic) }
-            )
-            movieScore = Dictionary(
-                uniqueKeysWithValues: strictTaste.movies.map { ($0.movie.id, $0.score) }
-            )
-            tvScore = Dictionary(
-                uniqueKeysWithValues: strictTaste.tvShows.map { ($0.show.id, $0.score) }
-            )
-        } else {
-            let boostedMovies = mergeMovieRecommendations(
-                base: movieRecommendations,
-                taste: tasteBoost.movies
-            )
-            let boostedTVShows = mergeTVRecommendations(
-                base: tvRecommendations,
-                taste: tasteBoost.tvShows
-            )
-            movieRecommendations = boostedMovies.map(\.movie)
-            tvRecommendations = boostedTVShows.map(\.show)
-
-            for boost in boostedMovies {
-                movieReasons[boost.movie.id] = boost.reason
-                movieCoherence[boost.movie.id] = max(movieCoherence[boost.movie.id] ?? 0.18, boost.coherence)
-                movieSemantic[boost.movie.id] = max(movieSemantic[boost.movie.id] ?? 0.14, boost.semantic)
-                movieScore[boost.movie.id] = max(movieScore[boost.movie.id] ?? 0.24, boost.score)
-            }
-            for boost in boostedTVShows {
-                tvReasons[boost.show.id] = boost.reason
-                tvCoherence[boost.show.id] = max(tvCoherence[boost.show.id] ?? 0.18, boost.coherence)
-                tvSemantic[boost.show.id] = max(tvSemantic[boost.show.id] ?? 0.14, boost.semantic)
-                tvScore[boost.show.id] = max(tvScore[boost.show.id] ?? 0.24, boost.score)
-            }
-        }
-
-        switch preferredMode {
-        case .movieOnly:
-            if movieRecommendations.count < minimumSuggestionCount, let popularMovies = try? await TMDBService.shared.getPopularMovies() {
-                for movie in popularMovies {
-                    guard movieRecommendations.count < minimumSuggestionCount else { break }
-                    guard !movieLibraryIDs.contains(movie.id) else { continue }
-                    guard !excludedMovieIDs.contains(movie.id) else { continue }
-                    guard !movieRecommendations.contains(where: { $0.id == movie.id }) else { continue }
-                    movieRecommendations.append(movie)
-                    movieReasons[movie.id] = "Popular recommendation related to your search"
-                    movieCoherence[movie.id] = 0.20
-                    movieSemantic[movie.id] = 0.12
-                    movieScore[movie.id] = 0.28
-                }
-            }
-        case .tvOnly:
-            if tvRecommendations.count < minimumSuggestionCount, let popularTV = try? await TMDBService.shared.getPopularTVShows() {
-                for show in popularTV {
-                    guard tvRecommendations.count < minimumSuggestionCount else { break }
-                    guard !tvLibraryIDs.contains(show.id) else { continue }
-                    guard !excludedTVIDs.contains(show.id) else { continue }
-                    guard !tvRecommendations.contains(where: { $0.id == show.id }) else { continue }
-                    tvRecommendations.append(show)
-                    tvReasons[show.id] = "Popular recommendation related to your search"
-                    tvCoherence[show.id] = 0.20
-                    tvSemantic[show.id] = 0.12
-                    tvScore[show.id] = 0.28
-                }
-            }
-        case .any:
-            if movieRecommendations.count + tvRecommendations.count < minimumSuggestionCount {
-                if let popularMovies = try? await TMDBService.shared.getPopularMovies() {
-                    for movie in popularMovies {
-                        guard movieRecommendations.count + tvRecommendations.count < minimumSuggestionCount else { break }
-                        guard !movieLibraryIDs.contains(movie.id) else { continue }
-                        guard !excludedMovieIDs.contains(movie.id) else { continue }
-                        guard !movieRecommendations.contains(where: { $0.id == movie.id }) else { continue }
-                        movieRecommendations.append(movie)
-                        movieReasons[movie.id] = "Popular recommendation related to your search"
-                        movieCoherence[movie.id] = 0.20
-                        movieSemantic[movie.id] = 0.12
-                        movieScore[movie.id] = 0.28
-                    }
-                }
-
-                if movieRecommendations.count + tvRecommendations.count < minimumSuggestionCount,
-                   let popularTV = try? await TMDBService.shared.getPopularTVShows() {
-                    for show in popularTV {
-                        guard movieRecommendations.count + tvRecommendations.count < minimumSuggestionCount else { break }
-                        guard !tvLibraryIDs.contains(show.id) else { continue }
-                        guard !excludedTVIDs.contains(show.id) else { continue }
-                        guard !tvRecommendations.contains(where: { $0.id == show.id }) else { continue }
-                        tvRecommendations.append(show)
-                        tvReasons[show.id] = "Popular recommendation related to your search"
-                        tvCoherence[show.id] = 0.20
-                        tvSemantic[show.id] = 0.12
-                        tvScore[show.id] = 0.28
-                    }
-                }
-            }
-        }
+        let movieRecommendations = strictTaste.movies.map(\.movie)
+            .filter { !movieLibraryIDs.contains($0.id) && !excludedMovieIDs.contains($0.id) }
+        let tvRecommendations = strictTaste.tvShows.map(\.show)
+            .filter { !tvLibraryIDs.contains($0.id) && !excludedTVIDs.contains($0.id) }
+        let movieReasons = Dictionary(
+            uniqueKeysWithValues: strictTaste.movies.map { ($0.movie.id, $0.reason) }
+        )
+        let tvReasons = Dictionary(
+            uniqueKeysWithValues: strictTaste.tvShows.map { ($0.show.id, $0.reason) }
+        )
+        let movieCoherence = Dictionary(
+            uniqueKeysWithValues: strictTaste.movies.map { ($0.movie.id, $0.coherence) }
+        )
+        let tvCoherence = Dictionary(
+            uniqueKeysWithValues: strictTaste.tvShows.map { ($0.show.id, $0.coherence) }
+        )
+        let movieSemantic = Dictionary(
+            uniqueKeysWithValues: strictTaste.movies.map { ($0.movie.id, $0.semantic) }
+        )
+        let tvSemantic = Dictionary(
+            uniqueKeysWithValues: strictTaste.tvShows.map { ($0.show.id, $0.semantic) }
+        )
+        let movieScore = Dictionary(
+            uniqueKeysWithValues: strictTaste.movies.map { ($0.movie.id, $0.score) }
+        )
+        let tvScore = Dictionary(
+            uniqueKeysWithValues: strictTaste.tvShows.map { ($0.show.id, $0.score) }
+        )
         
         let questions = generateFollowUpQuestions(
             understanding: understanding,
