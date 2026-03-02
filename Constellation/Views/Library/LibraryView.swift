@@ -245,6 +245,11 @@ struct LibraryView: View {
                 } label: {
                     Label("Mark as Watched", systemImage: "checkmark.circle")
                 }
+                Button(role: .destructive) {
+                    deleteItem(item: item)
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
             } else {
                 Menu("Set Rating") {
                     ForEach(1...5, id: \.self) { star in
@@ -261,6 +266,11 @@ struct LibraryView: View {
                 } label: {
                     Label("Move to Watchlist", systemImage: "bookmark")
                 }
+                Button(role: .destructive) {
+                    deleteItem(item: item)
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
             }
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -271,11 +281,17 @@ struct LibraryView: View {
                     markWatchedTarget = item
                 }
                 .tint(.green)
+                Button("Delete", role: .destructive) {
+                    deleteItem(item: item)
+                }
             } else {
                 Button("Move to Watchlist") {
                     markAsWatchlist(item: item)
                 }
                 .tint(.orange)
+                Button("Delete", role: .destructive) {
+                    deleteItem(item: item)
+                }
             }
         }
     }
@@ -399,6 +415,16 @@ struct LibraryView: View {
             movie.rating = rating
         case .tvShow(let show):
             show.rating = rating
+        }
+        try? modelContext.save()
+    }
+
+    private func deleteItem(item: LibraryItem) {
+        switch item {
+        case .movie(let movie):
+            modelContext.delete(movie)
+        case .tvShow(let show):
+            modelContext.delete(show)
         }
         try? modelContext.save()
     }

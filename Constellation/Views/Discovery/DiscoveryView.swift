@@ -274,11 +274,14 @@ struct DiscoveryView: View {
 
         turn.result = discovery
         let hasCards = hasRenderableResults(in: discovery, display: plan.displayPreference)
-        turn.assistantSummary = hasCards
+        let baseSummary = hasCards
             ? (plan.assistantLine?.isEmpty == false
                 ? plan.assistantLine
                 : intentService.fallbackAssistantSummary(plan: plan, state: conversationState))
             : "I couldn't find good matches for that topic yet. Try adding one more anchor like era, format, or region."
+        turn.assistantSummary = [baseSummary, watchlistContextNote(from: discovery)]
+            .compactMap { $0 }
+            .joined(separator: " ")
 
         turns[turnIndex] = turn
 
@@ -294,6 +297,7 @@ struct DiscoveryView: View {
     private func filteredMovies(from result: DiscoveryResult) -> [TMDBMovie] {
         let rejected = memoryStore.rejectedMovieIDs
         return result.recommendations.filter { movie in
+            guard !isMovieInLibrary(movie.id) else { return false }
             guard !rejected.contains(movie.id) else { return false }
             let coherence = result.movieRecommendationCoherence[movie.id] ?? 0
             let semantic = result.movieRecommendationSemantic[movie.id] ?? 0
@@ -307,6 +311,7 @@ struct DiscoveryView: View {
     private func filteredTV(from result: DiscoveryResult) -> [TMDBTVShow] {
         let rejected = memoryStore.rejectedTVIDs
         return result.tvRecommendations.filter { show in
+            guard !isTVInLibrary(show.id) else { return false }
             guard !rejected.contains(show.id) else { return false }
             let coherence = result.tvRecommendationCoherence[show.id] ?? 0
             let semantic = result.tvRecommendationSemantic[show.id] ?? 0
@@ -321,14 +326,27 @@ struct DiscoveryView: View {
         let filtered = filteredMovies(from: result)
         if !filtered.isEmpty { return filtered }
         let rejected = memoryStore.rejectedMovieIDs
-        return result.recommendations.filter { !rejected.contains($0.id) }
+        return result.recommendations.filter { !rejected.contains($0.id) && !isMovieInLibrary($0.id) }
     }
 
     private func displayedTV(from result: DiscoveryResult) -> [TMDBTVShow] {
         let filtered = filteredTV(from: result)
         if !filtered.isEmpty { return filtered }
         let rejected = memoryStore.rejectedTVIDs
-        return result.tvRecommendations.filter { !rejected.contains($0.id) }
+        return result.tvRecommendations.filter { !rejected.contains($0.id) && !isTVInLibrary($0.id) }
+    }
+
+    private func watchlistContextNote(from result: DiscoveryResult) -> String? {
+        let watchlistMovieTitles = result.inLibraryMovies
+            .filter { $0.watchedDate == nil }
+            .map(\.title)
+        let watchlistTVTitles = result.inLibraryTVShows
+            .filter { $0.watchedDate == nil }
+            .map(\.title)
+        let titles = Array(NSOrderedSet(array: watchlistMovieTitles + watchlistTVTitles)) as? [String] ?? []
+        guard !titles.isEmpty else { return nil }
+        let preview = titles.prefix(2).joined(separator: ", ")
+        return "Related in your watchlist: \(preview)."
     }
 
     private func movieSelection(for movie: TMDBMovie, in result: DiscoveryResult) -> DiscoveryMovieSelection {

@@ -155,6 +155,7 @@ struct TVShowSearchCard: View {
 struct TVShowDetailSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Query private var existingTVShows: [TVShow]
     
     let show: TMDBTVShow
     let recommendationContext: TVRecommendationContext?
@@ -165,6 +166,8 @@ struct TVShowDetailSheet: View {
     @State private var watchedDate = Date()
     @State private var notes = ""
     @State private var rating: Double = 0
+    @State private var showDuplicateAlert = false
+    @State private var duplicateMessage = "This TV show is already in your library."
 
     enum AddStatus: String, CaseIterable, Identifiable {
         case watchlist
@@ -343,6 +346,11 @@ struct TVShowDetailSheet: View {
             .task {
                 await loadTVShowDetails()
             }
+            .alert("Already Added", isPresented: $showDuplicateAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(duplicateMessage)
+            }
         }
     }
     
@@ -359,6 +367,11 @@ struct TVShowDetailSheet: View {
     
     private func addTVShow() {
         guard let detail = showDetail else { return }
+        if existingTVShows.contains(where: { $0.tmdbID == detail.id }) {
+            duplicateMessage = "\"\(detail.title)\" is already in your library."
+            showDuplicateAlert = true
+            return
+        }
         
         let isWatched = addStatus == .watched
         let newShow = TVShow(

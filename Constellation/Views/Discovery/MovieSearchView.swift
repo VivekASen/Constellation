@@ -163,6 +163,7 @@ struct MovieSearchCard: View {
 struct MovieDetailSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Query private var existingMovies: [Movie]
     
     let movie: TMDBMovie
     let recommendationContext: MovieRecommendationContext?
@@ -173,6 +174,8 @@ struct MovieDetailSheet: View {
     @State private var watchedDate = Date()
     @State private var notes = ""
     @State private var rating: Double = 0
+    @State private var showDuplicateAlert = false
+    @State private var duplicateMessage = "This movie is already in your library."
 
     enum AddStatus: String, CaseIterable, Identifiable {
         case watchlist
@@ -343,6 +346,11 @@ struct MovieDetailSheet: View {
             .task {
                 await loadMovieDetails()
             }
+            .alert("Already Added", isPresented: $showDuplicateAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(duplicateMessage)
+            }
         }
     }
     
@@ -359,6 +367,11 @@ struct MovieDetailSheet: View {
     
     private func addMovie() {
         guard let detail = movieDetail else { return }
+        if existingMovies.contains(where: { $0.tmdbID == detail.id }) {
+            duplicateMessage = "\"\(detail.title)\" is already in your library."
+            showDuplicateAlert = true
+            return
+        }
         
         let isWatched = addStatus == .watched
         let newMovie = Movie(
