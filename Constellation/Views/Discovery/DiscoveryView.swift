@@ -16,21 +16,12 @@ struct DiscoveryView: View {
     @State private var pendingTVForAddFeedback: TMDBTVShow?
     @State private var toastMessage: String?
     @State private var pendingTopicSwitch: String?
-    @State private var rotatingFactIndex = 0
 
     private let starterPrompts = [
         "space exploration",
         "murder mystery",
         "historical non-fiction",
         "thoughtful sci fi"
-    ]
-    private let rotatingFacts = [
-        "Trivia: The first feature film to win Best Picture was Wings (1927).",
-        "Quote: \"To infinity and beyond.\"",
-        "Trivia: The pilot of The X-Files premiered on September 10, 1993.",
-        "Quote: \"May the Force be with you.\"",
-        "Trivia: Parasite became the first non-English film to win Best Picture.",
-        "Quote: \"I am your father.\""
     ]
 
     private let appBlue = ConstellationPalette.accent
@@ -49,7 +40,6 @@ struct DiscoveryView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
                             assistantBubble("Tell me what you want to watch and I’ll refine with you. I can compare against your library and keep improving suggestions each turn.")
-                            rotatingFactBanner
 
                             if turns.isEmpty {
                                 starterPromptSection
@@ -194,9 +184,6 @@ struct DiscoveryView: View {
             .sheet(item: $showingAddTVShow, onDismiss: handleTVSheetDismiss) { show in
                 TVShowDetailSheet(show: show.show, recommendationContext: show.context)
             }
-            .task {
-                await rotateFactLoop()
-            }
         }
     }
 
@@ -242,7 +229,7 @@ struct DiscoveryView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Starter prompts")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(Color.white.opacity(0.72))
+                .foregroundStyle(Color.black.opacity(0.68))
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -253,44 +240,24 @@ struct DiscoveryView: View {
                         .font(.caption)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .background(ConstellationPalette.surfaceStrong)
+                        .background(Color.white)
                         .foregroundStyle(Color.black.opacity(0.85))
                         .clipShape(Capsule())
                         .overlay {
-                            Capsule().stroke(ConstellationPalette.border, lineWidth: 1)
+                            Capsule().stroke(Color.black.opacity(0.08), lineWidth: 1)
                         }
                     }
                 }
             }
         }
         .padding(12)
-        .background(surface)
+        .background(Color.white.opacity(0.96))
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay {
             RoundedRectangle(cornerRadius: 14)
-                .stroke(ConstellationPalette.border, lineWidth: 1)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
         }
-    }
-
-    private var rotatingFactBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "sparkles")
-                .foregroundStyle(ConstellationPalette.accentSoft)
-            Text(rotatingFacts[rotatingFactIndex])
-                .font(.caption)
-                .foregroundStyle(Color.white.opacity(0.82))
-                .lineLimit(2)
-                .id("fact-\(rotatingFactIndex)")
-                .transition(.opacity.combined(with: .move(edge: .top)))
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(Color.white.opacity(0.08))
-        .clipShape(Capsule())
-        .overlay {
-            Capsule().stroke(Color.white.opacity(0.18), lineWidth: 1)
-        }
-        .animation(.easeInOut(duration: 0.35), value: rotatingFactIndex)
+        .shadow(color: .black.opacity(0.10), radius: 6, y: 3)
     }
 
     private func submitMessage(_ rawMessage: String) async {
@@ -570,16 +537,6 @@ struct DiscoveryView: View {
         draftQuery = ""
         toastMessage = nil
         pendingTopicSwitch = nil
-    }
-
-    private func rotateFactLoop() async {
-        while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 8_000_000_000)
-            if Task.isCancelled { break }
-            withAnimation(.easeInOut(duration: 0.35)) {
-                rotatingFactIndex = (rotatingFactIndex + 1) % rotatingFacts.count
-            }
-        }
     }
 
     private func shouldConfirmTopicSwitch(_ message: String) -> Bool {
