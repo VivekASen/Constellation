@@ -89,28 +89,68 @@ class DiscoveryEngine {
                 .map { ($0.show.id, $0.score) }
         )
 
-        let boostedMovies = mergeMovieRecommendations(
-            base: movieRecommendations,
-            taste: tasteBoost.movies
+        let strictTaste = await fetchTasteDiveCandidatesStrict(
+            interest: interest,
+            understanding: understanding,
+            preferredMode: preferredMode
         )
-        let boostedTVShows = mergeTVRecommendations(
-            base: tvRecommendations,
-            taste: tasteBoost.tvShows
-        )
-        movieRecommendations = boostedMovies.map(\.movie)
-        tvRecommendations = boostedTVShows.map(\.show)
 
-        for boost in boostedMovies {
-            movieReasons[boost.movie.id] = boost.reason
-            movieCoherence[boost.movie.id] = max(movieCoherence[boost.movie.id] ?? 0.18, boost.coherence)
-            movieSemantic[boost.movie.id] = max(movieSemantic[boost.movie.id] ?? 0.14, boost.semantic)
-            movieScore[boost.movie.id] = max(movieScore[boost.movie.id] ?? 0.24, boost.score)
-        }
-        for boost in boostedTVShows {
-            tvReasons[boost.show.id] = boost.reason
-            tvCoherence[boost.show.id] = max(tvCoherence[boost.show.id] ?? 0.18, boost.coherence)
-            tvSemantic[boost.show.id] = max(tvSemantic[boost.show.id] ?? 0.14, boost.semantic)
-            tvScore[boost.show.id] = max(tvScore[boost.show.id] ?? 0.24, boost.score)
+        // In strict TasteDive mode, use TasteDive-driven picks directly and avoid
+        // mixing in broader fallback cards that can drift off-topic.
+        if !strictTaste.movies.isEmpty || !strictTaste.tvShows.isEmpty {
+            movieRecommendations = strictTaste.movies.map(\.movie)
+                .filter { !movieLibraryIDs.contains($0.id) && !excludedMovieIDs.contains($0.id) }
+            tvRecommendations = strictTaste.tvShows.map(\.show)
+                .filter { !tvLibraryIDs.contains($0.id) && !excludedTVIDs.contains($0.id) }
+
+            movieReasons = Dictionary(
+                uniqueKeysWithValues: strictTaste.movies.map { ($0.movie.id, $0.reason) }
+            )
+            tvReasons = Dictionary(
+                uniqueKeysWithValues: strictTaste.tvShows.map { ($0.show.id, $0.reason) }
+            )
+            movieCoherence = Dictionary(
+                uniqueKeysWithValues: strictTaste.movies.map { ($0.movie.id, $0.coherence) }
+            )
+            tvCoherence = Dictionary(
+                uniqueKeysWithValues: strictTaste.tvShows.map { ($0.show.id, $0.coherence) }
+            )
+            movieSemantic = Dictionary(
+                uniqueKeysWithValues: strictTaste.movies.map { ($0.movie.id, $0.semantic) }
+            )
+            tvSemantic = Dictionary(
+                uniqueKeysWithValues: strictTaste.tvShows.map { ($0.show.id, $0.semantic) }
+            )
+            movieScore = Dictionary(
+                uniqueKeysWithValues: strictTaste.movies.map { ($0.movie.id, $0.score) }
+            )
+            tvScore = Dictionary(
+                uniqueKeysWithValues: strictTaste.tvShows.map { ($0.show.id, $0.score) }
+            )
+        } else {
+            let boostedMovies = mergeMovieRecommendations(
+                base: movieRecommendations,
+                taste: tasteBoost.movies
+            )
+            let boostedTVShows = mergeTVRecommendations(
+                base: tvRecommendations,
+                taste: tasteBoost.tvShows
+            )
+            movieRecommendations = boostedMovies.map(\.movie)
+            tvRecommendations = boostedTVShows.map(\.show)
+
+            for boost in boostedMovies {
+                movieReasons[boost.movie.id] = boost.reason
+                movieCoherence[boost.movie.id] = max(movieCoherence[boost.movie.id] ?? 0.18, boost.coherence)
+                movieSemantic[boost.movie.id] = max(movieSemantic[boost.movie.id] ?? 0.14, boost.semantic)
+                movieScore[boost.movie.id] = max(movieScore[boost.movie.id] ?? 0.24, boost.score)
+            }
+            for boost in boostedTVShows {
+                tvReasons[boost.show.id] = boost.reason
+                tvCoherence[boost.show.id] = max(tvCoherence[boost.show.id] ?? 0.18, boost.coherence)
+                tvSemantic[boost.show.id] = max(tvSemantic[boost.show.id] ?? 0.14, boost.semantic)
+                tvScore[boost.show.id] = max(tvScore[boost.show.id] ?? 0.24, boost.score)
+            }
         }
 
         switch preferredMode {
@@ -538,6 +578,90 @@ class DiscoveryEngine {
         )
     }
 
+    private func fetchTasteDiveCandidatesStrict(
+        interest: String,
+        understanding: QueryUnderstanding,
+        preferredMode: PreferredDiscoveryMediaMode
+    ) async -> TasteCandidateBundle {
+        let seedQueries = Array(
+            NSOrderedSet(array: [interest] + understanding.suggestions.prefix(3))
+        ) as? [String] ?? [interest]
+
+        var rawTasteResults: [TasteDiveResult] = []
+        for seed in seedQueries.prefix(2) {
+            let typeHint: TasteDiveMediaType?
+            switch preferredMode {
+            case .movieOnly:
+                typeHint = .movies
+            case .tvOnly:
+                typeHint = .shows
+            case .any:
+                typeHint = nil
+            }
+
+            let results = (try? await TasteDiveService.shared.similar(query: seed, type: typeHint, limit: 10)) ?? []
+            rawTasteResults.append(contentsOf: results)
+        }
+
+        let dedupedTaste = dedupeTasteResults(rawTasteResults)
+        guard !dedupedTaste.isEmpty else { return TasteCandidateBundle(movies: [], tvShows: []) }
+
+        let personalTerms = personalPreferenceTerms(from: understanding)
+        var movieBoosts: [ScoredMovieRecommendation] = []
+        var tvBoosts: [ScoredTVRecommendation] = []
+
+        for taste in dedupedTaste {
+            let hint = parseTasteType(taste.type)
+
+            if preferredMode != .tvOnly, hint != .tvOnly,
+               let movie = await resolveMovieCandidate(from: taste.name, minSimilarity: 0.76) {
+                let score = blendedTasteScore(
+                    title: movie.title,
+                    overview: movie.overview,
+                    voteAverage: movie.voteAverage,
+                    voteCount: movie.voteCount,
+                    personalTerms: personalTerms,
+                    sourceBoost: 1.35
+                )
+                movieBoosts.append(
+                    ScoredMovieRecommendation(
+                        movie: movie,
+                        reason: "Taste graph match: \(taste.name)",
+                        score: score,
+                        coherence: min(0.92, 0.34 + score / 12.0),
+                        semantic: min(0.92, 0.28 + score / 14.0)
+                    )
+                )
+            }
+
+            if preferredMode != .movieOnly, hint != .movieOnly,
+               let show = await resolveTVCandidate(from: taste.name, minSimilarity: 0.76) {
+                let score = blendedTasteScore(
+                    title: show.title,
+                    overview: show.overview,
+                    voteAverage: show.voteAverage,
+                    voteCount: show.voteCount,
+                    personalTerms: personalTerms,
+                    sourceBoost: 1.35
+                )
+                tvBoosts.append(
+                    ScoredTVRecommendation(
+                        show: show,
+                        reason: "Taste graph match: \(taste.name)",
+                        score: score,
+                        coherence: min(0.92, 0.34 + score / 12.0),
+                        semantic: min(0.92, 0.28 + score / 14.0)
+                    )
+                )
+            }
+        }
+
+        return TasteCandidateBundle(
+            movies: dedupeScoredMoviesInOrder(movieBoosts),
+            tvShows: dedupeScoredTVShowsInOrder(tvBoosts)
+        )
+    }
+
     private func dedupeTasteResults(_ results: [TasteDiveResult]) -> [TasteDiveResult] {
         var seen = Set<String>()
         return results.filter { item in
@@ -549,28 +673,46 @@ class DiscoveryEngine {
         }
     }
 
-    private func resolveMovieCandidate(from title: String) async -> TMDBMovie? {
+    private func resolveMovieCandidate(from title: String, minSimilarity: Double = 0.72) async -> TMDBMovie? {
         let results = (try? await TMDBService.shared.searchMovies(query: title, page: 1)) ?? []
-        return results
+        let best = results
             .filter { ($0.voteCount ?? 0) >= 40 || ($0.voteAverage ?? 0) >= 6.8 }
             .sorted { lhs, rhs in
+                let lhsSim = normalizedTitleSimilarity(title, lhs.title)
+                let rhsSim = normalizedTitleSimilarity(title, rhs.title)
+                if lhsSim != rhsSim { return lhsSim > rhsSim }
                 let l = defaultScore(voteAverage: lhs.voteAverage, voteCount: lhs.voteCount)
                 let r = defaultScore(voteAverage: rhs.voteAverage, voteCount: rhs.voteCount)
                 return l > r
             }
             .first
+        guard let best else { return nil }
+
+        guard normalizedTitleSimilarity(title, best.title) >= minSimilarity else {
+            return nil
+        }
+        return best
     }
 
-    private func resolveTVCandidate(from title: String) async -> TMDBTVShow? {
+    private func resolveTVCandidate(from title: String, minSimilarity: Double = 0.72) async -> TMDBTVShow? {
         let results = (try? await TMDBService.shared.searchTVShows(query: title, page: 1)) ?? []
-        return results
+        let best = results
             .filter { ($0.voteCount ?? 0) >= 30 || ($0.voteAverage ?? 0) >= 6.8 }
             .sorted { lhs, rhs in
+                let lhsSim = normalizedTitleSimilarity(title, lhs.title)
+                let rhsSim = normalizedTitleSimilarity(title, rhs.title)
+                if lhsSim != rhsSim { return lhsSim > rhsSim }
                 let l = defaultScore(voteAverage: lhs.voteAverage, voteCount: lhs.voteCount)
                 let r = defaultScore(voteAverage: rhs.voteAverage, voteCount: rhs.voteCount)
                 return l > r
             }
             .first
+        guard let best else { return nil }
+
+        guard normalizedTitleSimilarity(title, best.title) >= minSimilarity else {
+            return nil
+        }
+        return best
     }
 
     private func defaultScore(voteAverage: Double?, voteCount: Int?) -> Double {
@@ -622,6 +764,35 @@ class DiscoveryEngine {
         if value.contains("movie") { return .movieOnly }
         if value.contains("show") || value.contains("tv") { return .tvOnly }
         return .unknown
+    }
+
+    private func normalizedTitleSimilarity(_ lhs: String, _ rhs: String) -> Double {
+        let left = Set(
+            normalizeForCompare(lhs)
+                .split(separator: " ")
+                .map(String.init)
+                .filter { $0.count > 2 }
+        )
+        let right = Set(
+            normalizeForCompare(rhs)
+                .split(separator: " ")
+                .map(String.init)
+                .filter { $0.count > 2 }
+        )
+        guard !left.isEmpty && !right.isEmpty else { return 0 }
+        let intersection = left.intersection(right).count
+        let union = left.union(right).count
+        return union == 0 ? 0 : Double(intersection) / Double(union)
+    }
+
+    private func dedupeScoredMoviesInOrder(_ items: [ScoredMovieRecommendation]) -> [ScoredMovieRecommendation] {
+        var seen = Set<Int>()
+        return items.filter { seen.insert($0.movie.id).inserted }
+    }
+
+    private func dedupeScoredTVShowsInOrder(_ items: [ScoredTVRecommendation]) -> [ScoredTVRecommendation] {
+        var seen = Set<Int>()
+        return items.filter { seen.insert($0.show.id).inserted }
     }
 }
 
