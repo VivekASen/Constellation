@@ -30,7 +30,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		AFCFF6D42F4FFEB100871B00 /* Exceptions for "Constellation" folder in "Constellation" target */ = {
+		AFDB69C82F563EF900C0D3BE /* Exceptions for "Constellation" folder in "Constellation" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -43,7 +43,7 @@
 		AFCFF6B32F4FFEAF00871B00 /* Constellation */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				AFCFF6D42F4FFEB100871B00 /* Exceptions for "Constellation" folder in "Constellation" target */,
+				AFDB69C82F563EF900C0D3BE /* Exceptions for "Constellation" folder in "Constellation" target */,
 			);
 			path = Constellation;
 			sourceTree = "<group>";

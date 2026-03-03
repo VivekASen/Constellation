@@ -5,6 +5,7 @@ struct LibraryView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Movie.dateAdded, order: .reverse) private var movies: [Movie]
     @Query(sort: \TVShow.dateAdded, order: .reverse) private var tvShows: [TVShow]
+    @Query(sort: \Book.dateAdded, order: .reverse) private var books: [Book]
 
     @State private var mode: LibraryMode = .all
     @State private var filter: LibraryMediaFilter = .all
@@ -62,6 +63,12 @@ struct LibraryView: View {
                         } label: {
                             Label("Add TV Show", systemImage: "tv.fill")
                         }
+
+                        Button {
+                            activeSheet = .book
+                        } label: {
+                            Label("Add Book", systemImage: "book.closed.fill")
+                        }
                     } label: {
                         Label("Add", systemImage: "plus")
                     }
@@ -73,6 +80,8 @@ struct LibraryView: View {
                     MovieSearchView()
                 case .tvShow:
                     TVShowSearchView()
+                case .book:
+                    BookSearchView()
                 }
             }
             .sheet(item: $markWatchedTarget) { target in
@@ -139,6 +148,7 @@ struct LibraryView: View {
                 Text("All").tag(LibraryMediaFilter.all)
                 Text("Movies").tag(LibraryMediaFilter.movies)
                 Text("TV").tag(LibraryMediaFilter.tv)
+                Text("Books").tag(LibraryMediaFilter.books)
             }
             .pickerStyle(.segmented)
         }
@@ -202,7 +212,8 @@ struct LibraryView: View {
     private var allItems: [LibraryItem] {
         let movieItems = movies.map(LibraryItem.movie)
         let showItems = tvShows.map(LibraryItem.tvShow)
-        return applyFilter(movieItems + showItems)
+        let bookItems = books.map(LibraryItem.book)
+        return applyFilter(movieItems + showItems + bookItems)
     }
 
     private var watchlistItems: [LibraryItem] {
@@ -257,9 +268,11 @@ struct LibraryView: View {
         case .all:
             return items
         case .movies:
-            return items.filter(\.isMovie)
+            return items.filter { $0.mediaType == .movie }
         case .tv:
-            return items.filter { !$0.isMovie }
+            return items.filter { $0.mediaType == .tvShow }
+        case .books:
+            return items.filter { $0.mediaType == .book }
         }
     }
 
@@ -307,6 +320,8 @@ struct LibraryView: View {
                 return AnyView(MovieDetailView(movie: movie))
             case .tvShow(let show):
                 return AnyView(TVShowDetailView(show: show))
+            case .book(let book):
+                return AnyView(BookDetailView(book: book))
             }
         }()
 
@@ -381,12 +396,12 @@ struct LibraryView: View {
                 Text(item.title)
                     .font(.headline)
                     .lineLimit(1)
-                Text(item.isMovie ? "Movie" : "TV")
+                Text(item.mediaLabel)
                     .font(.caption2.weight(.semibold))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(item.isMovie ? Color.blue.opacity(0.12) : Color.green.opacity(0.12))
-                    .foregroundStyle(item.isMovie ? .blue : .green)
+                    .background(item.mediaColor.opacity(0.12))
+                    .foregroundStyle(item.mediaColor)
                     .clipShape(Capsule())
 
                 Text(item.isWatched ? "Watched" : "Watchlist")
@@ -486,6 +501,9 @@ struct LibraryView: View {
         case .tvShow(let show):
             show.watchedDate = watchedDate
             show.rating = watchedRating > 0 ? watchedRating : nil
+        case .book(let book):
+            book.watchedDate = watchedDate
+            book.rating = watchedRating > 0 ? watchedRating : nil
         }
         try? modelContext.save()
     }
@@ -498,6 +516,9 @@ struct LibraryView: View {
         case .tvShow(let show):
             show.watchedDate = nil
             show.rating = nil
+        case .book(let book):
+            book.watchedDate = nil
+            book.rating = nil
         }
         try? modelContext.save()
     }
@@ -508,6 +529,8 @@ struct LibraryView: View {
             movie.rating = rating
         case .tvShow(let show):
             show.rating = rating
+        case .book(let book):
+            book.rating = rating
         }
         try? modelContext.save()
     }
@@ -518,6 +541,8 @@ struct LibraryView: View {
             modelContext.delete(movie)
         case .tvShow(let show):
             modelContext.delete(show)
+        case .book(let book):
+            modelContext.delete(book)
         }
         try? modelContext.save()
     }
@@ -555,9 +580,9 @@ private enum LibraryMode: String, CaseIterable, Identifiable {
     var emptyDescription: String {
         switch self {
         case .all:
-            return "Add movies or TV shows to start building your library."
+            return "Add movies, TV shows, or books to start building your library."
         case .watchlist:
-            return "Add movies or TV shows, then keep upcoming picks here."
+            return "Add media, then keep upcoming picks here."
         case .watched:
             return "Mark items as watched to build your ranked favorites."
         }
@@ -576,6 +601,7 @@ private enum LibraryMediaFilter: String, CaseIterable, Identifiable {
     case all
     case movies
     case tv
+    case books
     var id: String { rawValue }
 }
 
@@ -602,11 +628,13 @@ private enum LibrarySortOption: String, CaseIterable, Identifiable {
 private enum LibraryItem: Identifiable {
     case movie(Movie)
     case tvShow(TVShow)
+    case book(Book)
 
     var id: UUID {
         switch self {
         case .movie(let movie): return movie.id
         case .tvShow(let show): return show.id
+        case .book(let book): return book.id
         }
     }
 
@@ -614,12 +642,32 @@ private enum LibraryItem: Identifiable {
         switch self {
         case .movie(let movie): return movie.title
         case .tvShow(let show): return show.title
+        case .book(let book): return book.title
         }
     }
 
-    var isMovie: Bool {
-        if case .movie = self { return true }
-        return false
+    var mediaType: MediaType {
+        switch self {
+        case .movie: return .movie
+        case .tvShow: return .tvShow
+        case .book: return .book
+        }
+    }
+
+    var mediaLabel: String {
+        switch self {
+        case .movie: return "Movie"
+        case .tvShow: return "TV"
+        case .book: return "Book"
+        }
+    }
+
+    var mediaColor: Color {
+        switch self {
+        case .movie: return .blue
+        case .tvShow: return .green
+        case .book: return .orange
+        }
     }
 
     var isWatched: Bool {
@@ -630,6 +678,7 @@ private enum LibraryItem: Identifiable {
         switch self {
         case .movie(let movie): return movie.year
         case .tvShow(let show): return show.year
+        case .book(let book): return book.year
         }
     }
 
@@ -637,6 +686,7 @@ private enum LibraryItem: Identifiable {
         switch self {
         case .movie(let movie): return movie.rating
         case .tvShow(let show): return show.rating
+        case .book(let book): return book.rating
         }
     }
 
@@ -644,6 +694,7 @@ private enum LibraryItem: Identifiable {
         switch self {
         case .movie(let movie): return movie.watchedDate
         case .tvShow(let show): return show.watchedDate
+        case .book(let book): return book.watchedDate
         }
     }
 
@@ -651,6 +702,7 @@ private enum LibraryItem: Identifiable {
         switch self {
         case .movie(let movie): return movie.dateAdded
         case .tvShow(let show): return show.dateAdded
+        case .book(let book): return book.dateAdded
         }
     }
 
@@ -658,6 +710,7 @@ private enum LibraryItem: Identifiable {
         switch self {
         case .movie(let movie): return movie.themes
         case .tvShow(let show): return show.themes
+        case .book(let book): return book.themes
         }
     }
 }
@@ -665,6 +718,7 @@ private enum LibraryItem: Identifiable {
 private enum AddMediaSheet: String, Identifiable {
     case movie
     case tvShow
+    case book
 
     var id: String { rawValue }
 }

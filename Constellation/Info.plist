@@ -6,12 +6,16 @@
 	<dict>
 		<key>Books</key>
 		<string></string>
+		<key>Gemini</key>
+		<string>AIzaSyChLkzEkdXyX7_yUW-5ABvuLIcvKpv3Kn0</string>
+		<key>Groq</key>
+		<string></string>
 		<key>Podcast</key>
 		<string></string>
-		<key>TasteDive</key>
-		<string>1069659-Constell-844F0A1E</string>
 		<key>TMDB</key>
 		<string>REDACTED_TMDB_KEY</string>
+		<key>TasteDive</key>
+		<string>1069659-Constell-844F0A1E</string>
 	</dict>
 	<key>UIBackgroundModes</key>
 	<array>

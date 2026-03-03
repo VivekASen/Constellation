@@ -67,50 +67,6 @@ struct SettingsView: View {
                         semanticThreshold = 0.79
                     }
                 }
-                
-                Section("Recommendation Ranking") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        weightRow(title: "Semantic", value: recommendationSemanticWeight)
-                        Slider(value: $recommendationSemanticWeight, in: 0.10...0.85, step: 0.01)
-                        
-                        weightRow(title: "Quality", value: recommendationQualityWeight)
-                        Slider(value: $recommendationQualityWeight, in: 0.05...0.80, step: 0.01)
-                        
-                        weightRow(title: "Popularity", value: recommendationPopularityWeight)
-                        Slider(value: $recommendationPopularityWeight, in: 0.05...0.80, step: 0.01)
-                        
-                        weightRow(title: "Novelty", value: recommendationNoveltyWeight)
-                        Slider(value: $recommendationNoveltyWeight, in: 0.05...0.60, step: 0.01)
-                        
-                        weightRow(title: "Diversity Balance", value: recommendationDiversityBalance)
-                        Slider(value: $recommendationDiversityBalance, in: 0.40...0.95, step: 0.01)
-
-                        weightRow(title: "Topic Coherence Gate", value: recommendationCoherenceThreshold)
-                        Slider(value: $recommendationCoherenceThreshold, in: 0.10...0.70, step: 0.01)
-                        
-                        Text("Higher semantic weight favors close topical matches. Higher novelty boosts less similar-to-library picks. Diversity balance controls result variety. Topic coherence gate hard-drops off-topic cards.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    
-                    Button("Reset Recommendation Defaults") {
-                        recommendationSemanticWeight = 0.58
-                        recommendationQualityWeight = 0.28
-                        recommendationPopularityWeight = 0.20
-                        recommendationNoveltyWeight = 0.10
-                        recommendationDiversityBalance = 0.78
-                        recommendationCoherenceThreshold = 0.22
-                    }
-                }
-
-                Section("Notes") {
-                    Text("Recommendation source blending is configured in the backend and always on by default.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Text("This setting affects new theme normalization during extraction and discovery.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
             }
             .navigationTitle("Settings")
             .task {

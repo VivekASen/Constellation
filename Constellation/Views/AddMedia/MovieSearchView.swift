@@ -1,56 +1,60 @@
 //
-//  TVShowSearchView.swift
+//  MovieSearchView.swift
 //  Constellation
 //
 //  Created by Vivek  Sen on 2/27/26.
 //
 
+
 import SwiftUI
 import SwiftData
 
-struct TVShowSearchView: View {
+struct MovieSearchView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     
     @State private var searchText = ""
-    @State private var searchResults: [TMDBTVShow] = []
+    @State private var searchResults: [TMDBMovie] = []
     @State private var isSearching = false
-    @State private var selectedShow: TMDBTVShow?
+    @State private var selectedMovie: TMDBMovie?
     
     var body: some View {
         NavigationStack {
             VStack {
+                // Search results
                 if isSearching {
                     ProgressView("Searching...")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if searchResults.isEmpty && !searchText.isEmpty {
                     ContentUnavailableView(
                         "No Results",
-                        systemImage: "tv",
+                        systemImage: "film",
                         description: Text("Try a different search term")
                     )
                 } else if searchResults.isEmpty {
+                    // Initial state
                     VStack(spacing: 20) {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 60))
                             .foregroundStyle(.secondary)
                         
-                        Text("Search for TV Shows")
+                        Text("Search for Movies")
                             .font(.title2)
                             .fontWeight(.semibold)
                         
-                        Text("Find and add shows to your constellation")
+                        Text("Find and add movies to your constellation")
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                     }
                     .frame(maxHeight: .infinity)
                 } else {
+                    // Results list
                     ScrollView {
                         LazyVStack(spacing: 12) {
-                            ForEach(searchResults) { show in
-                                TVShowSearchCard(show: show)
+                            ForEach(searchResults) { movie in
+                                MovieSearchCard(movie: movie)
                                     .onTapGesture {
-                                        selectedShow = show
+                                        selectedMovie = movie
                                     }
                             }
                         }
@@ -58,21 +62,21 @@ struct TVShowSearchView: View {
                     }
                 }
             }
-            .navigationTitle("Add TV Show")
+            .navigationTitle("Add Movie")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
             }
-            .searchable(text: $searchText, prompt: "Search TMDB TV")
-            .onChange(of: searchText) { _, newValue in
+            .searchable(text: $searchText, prompt: "Search TMDB")
+            .onChange(of: searchText) { oldValue, newValue in
                 Task {
                     await performSearch(query: newValue)
                 }
             }
-            .sheet(item: $selectedShow) { show in
-                TVShowDetailSheet(show: show)
+            .sheet(item: $selectedMovie) { movie in
+                MovieDetailSheet(movie: movie)
             }
         }
     }
@@ -86,25 +90,28 @@ struct TVShowSearchView: View {
         isSearching = true
         
         do {
-            try await Task.sleep(nanoseconds: 500_000_000)
-            guard query == searchText else { return }
+            // Debounce search
+            try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
             
-            let results = try await TMDBService.shared.searchTVShows(query: query)
+            guard query == searchText else { return } // User kept typing
+            
+            let results = try await TMDBService.shared.searchMovies(query: query)
             searchResults = results
         } catch {
-            print("TV search error: \(error)")
+            print("Search error: \(error)")
         }
         
         isSearching = false
     }
 }
 
-struct TVShowSearchCard: View {
-    let show: TMDBTVShow
+struct MovieSearchCard: View {
+    let movie: TMDBMovie
     
     var body: some View {
         HStack(spacing: 12) {
-            AsyncImage(url: show.posterURL) { image in
+            // Poster
+            AsyncImage(url: movie.posterURL) { image in
                 image
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -112,25 +119,26 @@ struct TVShowSearchCard: View {
                 Rectangle()
                     .fill(Color.gray.opacity(0.3))
                     .overlay {
-                        Image(systemName: "tv")
+                        Image(systemName: "film")
                             .foregroundStyle(.secondary)
                     }
             }
             .frame(width: 60, height: 90)
             .cornerRadius(8)
             
+            // Info
             VStack(alignment: .leading, spacing: 4) {
-                Text(show.name)
+                Text(movie.title)
                     .font(.headline)
                     .lineLimit(2)
                 
-                if let year = show.year {
-                    Text(String(year))
+                if let year = movie.year {
+                    Text(String("\(year)"))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
                 
-                if let rating = show.voteAverage {
+                if let rating = movie.voteAverage {
                     HStack(spacing: 4) {
                         Image(systemName: "star.fill")
                             .font(.caption)
@@ -152,25 +160,24 @@ struct TVShowSearchCard: View {
     }
 }
 
-struct TVShowDetailSheet: View {
+struct MovieDetailSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
-    @Query private var existingTVShows: [TVShow]
+    @Query private var existingMovies: [Movie]
     
-    let show: TMDBTVShow
-    let recommendationContext: TVRecommendationContext?
-    
-    @State private var showDetail: TMDBTVShowDetail?
+    let movie: TMDBMovie
+         
+    @State private var movieDetail: TMDBMovieDetail?
     @State private var isLoading = true
     @State private var trailer: TMDBVideo?
     @State private var watchProviders: [TMDBWatchProvider] = []
-    @State private var similarShows: [TMDBTVShow] = []
+    @State private var similarMovies: [TMDBMovie] = []
     @State private var addStatus: AddStatus = .watchlist
     @State private var watchedDate = Date()
     @State private var notes = ""
     @State private var rating: Double = 0
     @State private var showDuplicateAlert = false
-    @State private var duplicateMessage = "This TV show is already in your library."
+    @State private var duplicateMessage = "This movie is already in your library."
 
     enum AddStatus: String, CaseIterable, Identifiable {
         case watchlist
@@ -178,9 +185,8 @@ struct TVShowDetailSheet: View {
         var id: String { rawValue }
     }
 
-    init(show: TMDBTVShow, recommendationContext: TVRecommendationContext? = nil) {
-        self.show = show
-        self.recommendationContext = recommendationContext
+    init(movie: TMDBMovie) {
+        self.movie = movie
     }
     
     var body: some View {
@@ -190,7 +196,8 @@ struct TVShowDetailSheet: View {
                     if isLoading {
                         ProgressView()
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if let detail = showDetail {
+                    } else if let detail = movieDetail {
+                        // Poster
                         AsyncImage(url: detail.posterURL) { image in
                             image
                                 .resizable()
@@ -204,6 +211,7 @@ struct TVShowDetailSheet: View {
                         .frame(maxWidth: .infinity)
                         .cornerRadius(12)
                         
+                        // Title & Year
                         VStack(alignment: .leading, spacing: 8) {
                             Text(detail.title)
                                 .font(.title)
@@ -211,31 +219,18 @@ struct TVShowDetailSheet: View {
                             
                             HStack {
                                 if let year = detail.year {
-                                    Text(String(year))
+                                    Text(String("\(year)"))
                                         .foregroundStyle(.secondary)
                                 }
                                 
-                                if let creator = detail.creator {
+                                if let director = detail.director {
                                     Text("•")
                                         .foregroundStyle(.secondary)
-                                    Text(creator)
+                                    Text(director)
                                         .foregroundStyle(.secondary)
                                 }
                             }
                             .font(.subheadline)
-                            
-                            HStack(spacing: 10) {
-                                if let seasons = detail.numberOfSeasons {
-                                    Text("\(seasons) season\(seasons == 1 ? "" : "s")")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                if let episodes = detail.numberOfEpisodes {
-                                    Text("\(episodes) episodes")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
                             
                             if let rating = detail.voteAverage {
                                 HStack(spacing: 4) {
@@ -246,6 +241,7 @@ struct TVShowDetailSheet: View {
                             }
                         }
                         
+                        // Genres
                         if !detail.genres.isEmpty {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack {
@@ -262,7 +258,8 @@ struct TVShowDetailSheet: View {
                             }
                         }
                         
-                        if let overview = detail.overview, !overview.isEmpty {
+                        // Overview
+                        if let overview = detail.overview {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Overview")
                                     .font(.headline)
@@ -271,22 +268,6 @@ struct TVShowDetailSheet: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
-
-                        if let context = recommendationContext {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Why This Was Recommended")
-                                    .font(.headline)
-                                Text(context.reason)
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                HStack(spacing: 12) {
-                                    scorePill("Semantic", value: context.semanticScore)
-                                    scorePill("Coherence", value: context.coherenceScore)
-                                    scorePill("Overall", value: context.blendedScore)
-                                }
-                            }
-                        }
-
                         if let trailer, let url = trailer.youtubeURL {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Trailer")
@@ -325,7 +306,7 @@ struct TVShowDetailSheet: View {
                                             }
                                             .padding(.horizontal, 10)
                                             .padding(.vertical, 6)
-                                            .background(Color.green.opacity(0.14))
+                                            .background(Color.blue.opacity(0.12))
                                             .clipShape(Capsule())
                                         }
                                     }
@@ -333,13 +314,13 @@ struct TVShowDetailSheet: View {
                             }
                         }
 
-                        if !similarShows.isEmpty {
+                        if !similarMovies.isEmpty {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Similar Picks")
                                     .font(.headline)
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     HStack(spacing: 10) {
-                                        ForEach(similarShows.prefix(8)) { similar in
+                                        ForEach(similarMovies.prefix(8)) { similar in
                                             VStack(alignment: .leading, spacing: 4) {
                                                 AsyncImage(url: similar.posterURL) { image in
                                                     image.resizable().aspectRatio(contentMode: .fill)
@@ -348,7 +329,7 @@ struct TVShowDetailSheet: View {
                                                 }
                                                 .frame(width: 95, height: 140)
                                                 .clipShape(RoundedRectangle(cornerRadius: 8))
-                                                Text(similar.name)
+                                                Text(similar.title)
                                                     .font(.caption.weight(.semibold))
                                                     .lineLimit(2)
                                                     .frame(width: 95, alignment: .leading)
@@ -361,6 +342,7 @@ struct TVShowDetailSheet: View {
                         
                         Divider()
                         
+                        // Add to library form
                         VStack(alignment: .leading, spacing: 16) {
                             Text("Add to Your Library")
                                 .font(.headline)
@@ -405,7 +387,7 @@ struct TVShowDetailSheet: View {
                 }
                 .padding()
             }
-            .navigationTitle("TV Show Details")
+            .navigationTitle("Movie Details")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -413,13 +395,13 @@ struct TVShowDetailSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(addStatus == .watchlist ? "Add to Watchlist" : "Add as Watched") {
-                        addTVShow()
+                        addMovie()
                     }
-                    .disabled(showDetail == nil)
+                    .disabled(movieDetail == nil)
                 }
             }
             .task {
-                await loadTVShowDetails()
+                await loadMovieDetails()
             }
             .alert("Already Added", isPresented: $showDuplicateAlert) {
                 Button("OK", role: .cancel) {}
@@ -429,13 +411,13 @@ struct TVShowDetailSheet: View {
         }
     }
     
-    private func loadTVShowDetails() async {
+    private func loadMovieDetails() async {
         do {
-            let detail = try await TMDBService.shared.getTVShowDetails(id: show.id)
-            showDetail = detail
-            async let videosTask = TMDBService.shared.getTVVideos(tvID: show.id)
-            async let providersTask = TMDBService.shared.getTVWatchProviders(tvID: show.id)
-            async let similarTask = TMDBService.shared.getTVRecommendations(tvID: show.id)
+            let detail = try await TMDBService.shared.getMovieDetails(id: movie.id)
+            movieDetail = detail
+            async let videosTask = TMDBService.shared.getMovieVideos(movieID: movie.id)
+            async let providersTask = TMDBService.shared.getMovieWatchProviders(movieID: movie.id)
+            async let similarTask = TMDBService.shared.getMovieRecommendations(movieID: movie.id)
 
             if let videos = try? await videosTask {
                 trailer = videos.first(where: { video in
@@ -443,20 +425,20 @@ struct TVShowDetailSheet: View {
                 }) ?? videos.first(where: { $0.site.lowercased() == "youtube" })
             }
             watchProviders = (try? await providersTask) ?? []
-            similarShows = (try? await similarTask)?
-                .filter { $0.voteCount ?? 0 >= 80 }
+            similarMovies = (try? await similarTask)?
+                .filter { $0.voteCount ?? 0 >= 120 }
                 .sorted { ($0.voteAverage ?? 0) > ($1.voteAverage ?? 0) } ?? []
             isLoading = false
         } catch {
-            print("Failed to load TV show details: \(error)")
+            print("Failed to load movie details: \(error)")
             isLoading = false
         }
     }
     
-    private func addTVShow() {
-        guard let detail = showDetail else { return }
+    private func addMovie() {
+        guard let detail = movieDetail else { return }
         let normalizedTitle = detail.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let duplicateExists = existingTVShows.contains { existing in
+        let duplicateExists = existingMovies.contains { existing in
             if existing.tmdbID == detail.id { return true }
             let existingTitle = existing.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let yearMatches = (existing.year == nil || detail.year == nil || existing.year == detail.year)
@@ -469,26 +451,25 @@ struct TVShowDetailSheet: View {
         }
         
         let isWatched = addStatus == .watched
-        let newShow = TVShow(
+        let newMovie = Movie(
             title: detail.title,
             year: detail.year,
-            creator: detail.creator,
+            director: detail.director,
             posterURL: detail.posterURL?.absoluteString,
             overview: detail.overview,
             genres: detail.genres.map { $0.name },
-            seasonCount: detail.numberOfSeasons,
-            episodeCount: detail.numberOfEpisodes,
             rating: isWatched && rating > 0 ? rating : nil,
             watchedDate: isWatched ? watchedDate : nil,
             notes: notes.isEmpty ? nil : notes,
             tmdbID: detail.id
         )
         
-        modelContext.insert(newShow)
+        modelContext.insert(newMovie)
         
+        // Extract themes in background
         Task {
-            let themes = await ThemeExtractor.shared.extractThemes(from: newShow)
-            newShow.themes = themes
+            let themes = await ThemeExtractor.shared.extractThemes(from: newMovie)
+            newMovie.themes = themes
             try? modelContext.save()
         }
         
@@ -507,14 +488,7 @@ struct TVShowDetailSheet: View {
     }
 }
 
-struct TVRecommendationContext {
-    let reason: String
-    let semanticScore: Double
-    let coherenceScore: Double
-    let blendedScore: Double
-}
-
 #Preview {
-    TVShowSearchView()
-        .modelContainer(for: TVShow.self, inMemory: true)
+    MovieSearchView()
+        .modelContainer(for: Movie.self, inMemory: true)
 }

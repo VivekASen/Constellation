@@ -15,12 +15,6 @@ struct ContentView: View {
                 .tabItem {
                     Label("Home", systemImage: "house.fill")
                 }
-
-            DiscoveryView()
-                .tabItem {
-                    Label("Discover", systemImage: "sparkles")
-                }
-
             LibraryView()
                 .tabItem {
                     Label("Library", systemImage: "books.vertical.fill")
@@ -43,6 +37,7 @@ struct ContentView: View {
 private enum AddMediaSheet: String, Identifiable {
     case movie
     case tvShow
+    case book
     
     var id: String { rawValue }
 }
@@ -50,6 +45,7 @@ private enum AddMediaSheet: String, Identifiable {
 struct HomeView: View {
     @Query(sort: \Movie.dateAdded, order: .reverse) private var movies: [Movie]
     @Query(sort: \TVShow.dateAdded, order: .reverse) private var tvShows: [TVShow]
+    @Query(sort: \Book.dateAdded, order: .reverse) private var books: [Book]
     @Query private var collections: [ItemCollection]
 
     
@@ -60,11 +56,12 @@ struct HomeView: View {
     var allThemes: [String] {
         let movieThemes = movies.flatMap { ThemeExtractor.shared.normalizeThemes($0.themes) }
         let tvThemes = tvShows.flatMap { ThemeExtractor.shared.normalizeThemes($0.themes) }
-        return Array(Set(movieThemes + tvThemes)).sorted()
+        let bookThemes = books.flatMap { ThemeExtractor.shared.normalizeThemes($0.themes) }
+        return Array(Set(movieThemes + tvThemes + bookThemes)).sorted()
     }
     
     var totalItems: Int {
-        movies.count + tvShows.count
+        movies.count + tvShows.count + books.count
     }
     
     var body: some View {
@@ -101,6 +98,7 @@ struct HomeView: View {
                             ConstellationGraphView(
                                 movies: movies,
                                 tvShows: tvShows,
+                                books: books,
                                 collections: collections
                             )
                         }
@@ -160,8 +158,23 @@ struct HomeView: View {
                             }
                         }
                     }
+
+                    if !books.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Recent Books")
+                                .font(.headline)
+                                .padding(.horizontal)
+
+                            ForEach(books.prefix(5)) { book in
+                                NavigationLink(destination: BookDetailView(book: book)) {
+                                    BookRow(book: book)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
                     
-                    if movies.isEmpty && tvShows.isEmpty {
+                    if movies.isEmpty && tvShows.isEmpty && books.isEmpty {
                         VStack(spacing: 16) {
                             Text("🌟")
                                 .font(.system(size: 60))
@@ -170,7 +183,7 @@ struct HomeView: View {
                                 .font(.title2)
                                 .fontWeight(.semibold)
                             
-                            Text("Add movies and TV shows to discover connections")
+                            Text("Add movies, TV shows, and books to build your library")
                                 .multilineTextAlignment(.center)
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal)
@@ -195,6 +208,16 @@ struct HomeView: View {
                                 }
                             }
                             .padding(.horizontal)
+
+                            Button(action: { activeSheet = .book }) {
+                                Label("Add Book", systemImage: "book.closed.fill")
+                                    .padding()
+                                    .frame(maxWidth: .infinity)
+                                    .background(Color.orange)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
+                            }
+                            .padding(.horizontal)
                         }
                         .padding(.vertical, 60)
                     }
@@ -215,6 +238,12 @@ struct HomeView: View {
                         } label: {
                             Label("Add TV Show", systemImage: "tv.fill")
                         }
+
+                        Button {
+                            activeSheet = .book
+                        } label: {
+                            Label("Add Book", systemImage: "book.closed.fill")
+                        }
                     } label: {
                         Label("Add", systemImage: "plus")
                     }
@@ -226,6 +255,8 @@ struct HomeView: View {
                     MovieSearchView()
                 case .tvShow:
                     TVShowSearchView()
+                case .book:
+                    BookSearchView()
                 }
             }
             .task(id: movies.map(\.id).description + tvShows.map(\.id).description) {
@@ -728,6 +759,96 @@ struct TVShowRow: View {
     }
 }
 
+struct BookRow: View {
+    let book: Book
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if let coverURL = book.coverURL, let url = URL(string: coverURL) {
+                AsyncImage(url: url) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.3))
+                        .overlay { Text("📚").font(.largeTitle) }
+                }
+                .frame(width: 60, height: 90)
+                .cornerRadius(8)
+            } else {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+                    .frame(width: 60, height: 90)
+                    .cornerRadius(8)
+                    .overlay { Text("📚").font(.largeTitle) }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(book.title)
+                    .font(.headline)
+                    .lineLimit(2)
+
+                HStack(spacing: 8) {
+                    if let year = book.year {
+                        Text(String(year))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let author = book.author {
+                        Text(author)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    if let rating = book.rating {
+                        HStack(spacing: 2) {
+                            Image(systemName: "star.fill")
+                                .font(.caption)
+                            Text(String(format: "%.1f", rating))
+                                .font(.caption)
+                        }
+                        .foregroundStyle(.yellow)
+                    }
+                }
+
+                if !book.themes.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(book.themes.prefix(3), id: \.self) { theme in
+                                Text(theme)
+                                    .font(.caption2)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Color.orange.opacity(0.2))
+                                    .foregroundStyle(.orange)
+                                    .cornerRadius(12)
+                            }
+
+                            if book.themes.count > 3 {
+                                Text("+\(book.themes.count - 3)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } else {
+                    Text("Extracting themes...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .italic()
+                }
+            }
+
+            Spacer()
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .cornerRadius(12)
+        .padding(.horizontal)
+    }
+}
+
 private enum HomeSuggestionMediaType {
     case movie
     case tv
@@ -793,5 +914,5 @@ private struct HomeSuggestionCard: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: [Movie.self, TVShow.self, Theme.self, ItemCollection.self], inMemory: true)
+        .modelContainer(for: [Movie.self, TVShow.self, Book.self, Theme.self, ItemCollection.self], inMemory: true)
 }

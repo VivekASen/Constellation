@@ -49,14 +49,6 @@ class TMDBService {
         let response = try JSONDecoder().decode(TMDBSearchResponse.self, from: data)
         return response.results
     }
-
-    func discoverMovies(genreID: Int, page: Int = 1) async throws -> [TMDBMovie] {
-        let urlString = "\(baseURL)/discover/movie?api_key=\(apiKey)&with_genres=\(genreID)&sort_by=vote_count.desc&vote_count.gte=200&page=\(max(1, page))"
-        let data = try await fetchData(urlString: urlString, ttl: popularTTL)
-        let response = try JSONDecoder().decode(TMDBSearchResponse.self, from: data)
-        return response.results
-    }
-
     func getSimilarMovies(movieID: Int, page: Int = 1) async throws -> [TMDBMovie] {
         let urlString = "\(baseURL)/movie/\(movieID)/similar?api_key=\(apiKey)&page=\(max(1, page))"
         let data = try await fetchData(urlString: urlString, ttl: searchTTL)
@@ -90,15 +82,7 @@ class TMDBService {
         let data = try await fetchData(urlString: urlString, ttl: detailTTL)
         let response = try JSONDecoder().decode(TMDBMovieKeywordsResponse.self, from: data)
         return response.keywords.map(\.name)
-    }
-
-    func discoverMovies(keywordID: Int, page: Int = 1) async throws -> [TMDBMovie] {
-        let urlString = "\(baseURL)/discover/movie?api_key=\(apiKey)&with_keywords=\(keywordID)&sort_by=vote_count.desc&vote_count.gte=60&page=\(max(1, page))"
-        let data = try await fetchData(urlString: urlString, ttl: popularTTL)
-        let response = try JSONDecoder().decode(TMDBSearchResponse.self, from: data)
-        return response.results
-    }
-    
+    }    
     // MARK: - TV Shows
     
     func searchTVShows(query: String, page: Int = 1) async throws -> [TMDBTVShow] {
@@ -128,14 +112,6 @@ class TMDBService {
         let response = try JSONDecoder().decode(TMDBTVSearchResponse.self, from: data)
         return response.results
     }
-
-    func discoverTVShows(genreID: Int, page: Int = 1) async throws -> [TMDBTVShow] {
-        let urlString = "\(baseURL)/discover/tv?api_key=\(apiKey)&with_genres=\(genreID)&sort_by=vote_count.desc&vote_count.gte=150&page=\(max(1, page))"
-        let data = try await fetchData(urlString: urlString, ttl: popularTTL)
-        let response = try JSONDecoder().decode(TMDBTVSearchResponse.self, from: data)
-        return response.results
-    }
-
     func getSimilarTVShows(tvID: Int, page: Int = 1) async throws -> [TMDBTVShow] {
         let urlString = "\(baseURL)/tv/\(tvID)/similar?api_key=\(apiKey)&page=\(max(1, page))"
         let data = try await fetchData(urlString: urlString, ttl: searchTTL)
@@ -170,14 +146,6 @@ class TMDBService {
         let response = try JSONDecoder().decode(TMDBTVKeywordsResponse.self, from: data)
         return response.results.map(\.name)
     }
-
-    func discoverTVShows(keywordID: Int, page: Int = 1) async throws -> [TMDBTVShow] {
-        let urlString = "\(baseURL)/discover/tv?api_key=\(apiKey)&with_keywords=\(keywordID)&sort_by=vote_count.desc&vote_count.gte=40&page=\(max(1, page))"
-        let data = try await fetchData(urlString: urlString, ttl: popularTTL)
-        let response = try JSONDecoder().decode(TMDBTVSearchResponse.self, from: data)
-        return response.results
-    }
-
     func searchKeywords(query: String) async throws -> [TMDBKeyword] {
         let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         let urlString = "\(baseURL)/search/keyword?api_key=\(apiKey)&query=\(encodedQuery)"

@@ -27,6 +27,8 @@ struct ConstellationGraphEdge: Identifiable {
         switch source {
         case .theme:
             return Color.gray
+        case .genre:
+            return Color.orange
         case .collection:
             return Color.cyan
         case .hybrid:
@@ -38,6 +40,8 @@ struct ConstellationGraphEdge: Identifiable {
         switch source {
         case .theme:
             return Color.gray
+        case .genre:
+            return Color.orange
         case .collection:
             return Color.cyan
         case .hybrid:
@@ -67,6 +71,7 @@ struct ConstellationGraphEdgeAggregate {
 
 enum ConstellationGraphEdgeSource {
     case theme
+    case genre
     case collection
     case hybrid
     
@@ -84,6 +89,7 @@ enum ConstellationGraphEdgeSource {
         case .hybrid: return 3
         case .collection: return 2
         case .theme: return 1
+        case .genre: return 1
         }
     }
 }
@@ -91,14 +97,18 @@ enum ConstellationGraphEdgeSource {
 enum ConstellationGraphNodeKind: Hashable {
     case movie
     case tvShow
+    case book
     case theme
+    case genre
     
     // MARK: - Presentation
     var color: Color {
         switch self {
         case .movie: return .blue
         case .tvShow: return .green
+        case .book: return .orange
         case .theme: return .purple
+        case .genre: return .orange
         }
     }
     
@@ -106,7 +116,9 @@ enum ConstellationGraphNodeKind: Hashable {
         switch self {
         case .movie: return "🎬"
         case .tvShow: return "📺"
+        case .book: return "📚"
         case .theme: return "⭐"
+        case .genre: return "🏷️"
         }
     }
     
@@ -114,15 +126,19 @@ enum ConstellationGraphNodeKind: Hashable {
         switch self {
         case .movie: return "Movie"
         case .tvShow: return "TV Show"
+        case .book: return "Book"
         case .theme: return "Theme"
+        case .genre: return "Genre"
         }
     }
     
     var labelPriority: Int {
         switch self {
         case .theme: return 3
+        case .genre: return 2
         case .movie: return 2
         case .tvShow: return 1
+        case .book: return 1
         }
     }
     
@@ -130,7 +146,9 @@ enum ConstellationGraphNodeKind: Hashable {
         switch self {
         case .movie: return "#3b82f6"
         case .tvShow: return "#22c55e"
+        case .book: return "#f97316"
         case .theme: return "#c026d3"
+        case .genre: return "#f59e0b"
         }
     }
     
@@ -138,7 +156,9 @@ enum ConstellationGraphNodeKind: Hashable {
         switch self {
         case .movie: return "movie"
         case .tvShow: return "tvShow"
+        case .book: return "book"
         case .theme: return "theme"
+        case .genre: return "genre"
         }
     }
 }
@@ -147,23 +167,29 @@ enum ConstellationGraphFilter: CaseIterable {
     case all
     case movies
     case tvShows
+    case books
     case themes
+    case genres
     
     var title: String {
         switch self {
         case .all: return "All"
         case .movies: return "Movies"
         case .tvShows: return "TV"
+        case .books: return "Books"
         case .themes: return "Themes"
+        case .genres: return "Genres"
         }
     }
     
     var visibleKinds: Set<ConstellationGraphNodeKind> {
         switch self {
-        case .all: return [.movie, .tvShow, .theme]
-        case .movies: return [.movie, .theme]
-        case .tvShows: return [.tvShow, .theme]
+        case .all: return [.movie, .tvShow, .book, .theme, .genre]
+        case .movies: return [.movie, .theme, .genre]
+        case .tvShows: return [.tvShow, .theme, .genre]
+        case .books: return [.book, .theme, .genre]
         case .themes: return [.theme]
+        case .genres: return [.genre]
         }
     }
 }
@@ -225,6 +251,10 @@ func applyConstellationGraphFilter(nodes: [ConstellationGraphNode], edges: [Cons
     case .themes:
         let themeIDs = Set(nodes.filter { $0.kind == .theme }.map(\.id))
         return filtered(allowedIDs: themeIDs)
+
+    case .genres:
+        let genreIDs = Set(nodes.filter { $0.kind == .genre }.map(\.id))
+        return filtered(allowedIDs: genreIDs)
         
     case .movies:
         let movieIDs = Set(nodes.filter { $0.kind == .movie }.map(\.id))
@@ -232,9 +262,9 @@ func applyConstellationGraphFilter(nodes: [ConstellationGraphNode], edges: [Cons
         
         for edge in edges {
             guard let fromKind = nodeByID[edge.fromID]?.kind, let toKind = nodeByID[edge.toID]?.kind else { continue }
-            if fromKind == .movie && toKind == .theme {
+            if fromKind == .movie && (toKind == .theme || toKind == .genre) {
                 allowed.insert(edge.toID)
-            } else if fromKind == .theme && toKind == .movie {
+            } else if (fromKind == .theme || fromKind == .genre) && toKind == .movie {
                 allowed.insert(edge.fromID)
             }
         }
@@ -247,13 +277,28 @@ func applyConstellationGraphFilter(nodes: [ConstellationGraphNode], edges: [Cons
         
         for edge in edges {
             guard let fromKind = nodeByID[edge.fromID]?.kind, let toKind = nodeByID[edge.toID]?.kind else { continue }
-            if fromKind == .tvShow && toKind == .theme {
+            if fromKind == .tvShow && (toKind == .theme || toKind == .genre) {
                 allowed.insert(edge.toID)
-            } else if fromKind == .theme && toKind == .tvShow {
+            } else if (fromKind == .theme || fromKind == .genre) && toKind == .tvShow {
                 allowed.insert(edge.fromID)
             }
         }
         
+        return filtered(allowedIDs: allowed)
+
+    case .books:
+        let bookIDs = Set(nodes.filter { $0.kind == .book }.map(\.id))
+        var allowed = bookIDs
+
+        for edge in edges {
+            guard let fromKind = nodeByID[edge.fromID]?.kind, let toKind = nodeByID[edge.toID]?.kind else { continue }
+            if fromKind == .book && (toKind == .theme || toKind == .genre) {
+                allowed.insert(edge.toID)
+            } else if (fromKind == .theme || fromKind == .genre) && toKind == .book {
+                allowed.insert(edge.fromID)
+            }
+        }
+
         return filtered(allowedIDs: allowed)
     }
 }

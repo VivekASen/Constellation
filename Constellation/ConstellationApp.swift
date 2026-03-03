@@ -14,6 +14,7 @@ struct ConstellationApp: App {
         let schema = Schema([
             Movie.self,
             TVShow.self,
+            Book.self,
             Theme.self,
             ItemCollection.self
         ])

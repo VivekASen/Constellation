@@ -13,6 +13,7 @@ struct CollectionsView: View {
     @Query(sort: \ItemCollection.createdDate, order: .reverse) private var collections: [ItemCollection]
     @Query private var movies: [Movie]
     @Query private var tvShows: [TVShow]
+    @Query private var books: [Book]
     
     @State private var showingCreateCollection = false
     @State private var autoGenerationSummary = ""
@@ -75,6 +76,7 @@ struct CollectionsView: View {
         let result = CollectionGenerator.shared.generateThemeCollections(
             movies: movies,
             tvShows: tvShows,
+            books: books,
             existingCollections: collections,
             modelContext: modelContext
         )

@@ -12,6 +12,7 @@ import SwiftUI
 struct ConstellationGraphView: View {
     let movies: [Movie]
     let tvShows: [TVShow]
+    let books: [Book]
     let collections: [ItemCollection]
     
     @State private var selectedNodeID: String?
@@ -19,28 +20,32 @@ struct ConstellationGraphView: View {
     @State private var showImmersiveMode = false
     @State private var selectedThemeFilter: String = ConstellationGraphFilterToken.all
     @State private var selectedCollectionFilter: String = ConstellationGraphFilterToken.all
+    @State private var showGenres = true
     @State private var densityMode: ConstellationGraphDensityMode = .simple
     @State private var labelDensity: ConstellationGraphLabelDensity = .medium
     @State private var homeResetToken: Int = 0
     @State private var hasHomeGraphInteraction = false
+    @State private var genreToastMessage: String?
+    @State private var genreToastWorkItem: DispatchWorkItem?
     
     @State private var selectedMovie: Movie?
     @State private var selectedTVShow: TVShow?
+    @State private var selectedBook: Book?
     @State private var selectedTheme: ConstellationThemeSelection?
     
     // MARK: - Body
     var body: some View {
-        let themeOptions = Array(Set(movies.flatMap(\.themes) + tvShows.flatMap(\.themes))).sorted()
+        let themeOptions = Array(Set(movies.flatMap(normalizedThemes(for:)) + tvShows.flatMap(normalizedThemes(for:)) + books.flatMap(normalizedThemes(for:)))).sorted()
         let collectionOptions = collections.sorted { $0.name < $1.name }
         
-        let homeGraph = buildGraph(themeFilter: nil, collectionFilter: nil, densityMode: .detailed)
+        let homeGraph = buildGraph(themeFilter: nil, collectionFilter: nil, densityMode: .detailed, includeGenres: showGenres)
         let homeGraphFiltered = applyConstellationGraphFilter(nodes: homeGraph.nodes, edges: homeGraph.edges, filter: .all)
         let homeNodes = homeGraphFiltered.nodes
         let homeEdges = homeGraphFiltered.edges
         
         let selectedTheme = selectedThemeFilter == ConstellationGraphFilterToken.all ? nil : selectedThemeFilter
         let selectedCollection = selectedCollectionFilter == ConstellationGraphFilterToken.all ? nil : selectedCollectionFilter
-        let immersiveGraph = buildGraph(themeFilter: selectedTheme, collectionFilter: selectedCollection, densityMode: densityMode)
+        let immersiveGraph = buildGraph(themeFilter: selectedTheme, collectionFilter: selectedCollection, densityMode: densityMode, includeGenres: showGenres)
         
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
@@ -110,6 +115,30 @@ struct ConstellationGraphView: View {
                             description: Text("Add more items to render meaningful graph connections")
                         )
                     }
+
+                    VStack {
+                        HStack {
+                            Spacer()
+                            genresTogglePill
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+
+                    if let genreToastMessage {
+                        VStack {
+                            Spacer()
+                            Text(genreToastMessage)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(Color.black.opacity(0.65))
+                                .clipShape(Capsule())
+                                .padding(.bottom, 10)
+                        }
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                 }
             }
             .frame(height: 440)
@@ -130,6 +159,9 @@ struct ConstellationGraphView: View {
         .sheet(item: $selectedTVShow) { show in
             NavigationStack { TVShowDetailView(show: show) }
         }
+        .sheet(item: $selectedBook) { book in
+            NavigationStack { BookDetailView(book: book) }
+        }
         .sheet(item: $selectedTheme) { theme in
             NavigationStack { ThemeDetailView(themeName: theme.id) }
         }
@@ -139,6 +171,7 @@ struct ConstellationGraphView: View {
                 filter: $filter,
                 labelDensity: $labelDensity,
                 densityMode: $densityMode,
+                showGenres: $showGenres,
                 selectedThemeFilter: $selectedThemeFilter,
                 selectedCollectionFilter: $selectedCollectionFilter,
                 themeOptions: themeOptions,
@@ -155,6 +188,10 @@ struct ConstellationGraphView: View {
         .onChange(of: selectedThemeFilter) { _, _ in resetViewport() }
         .onChange(of: selectedCollectionFilter) { _, _ in resetViewport() }
         .onChange(of: filter) { _, _ in resetViewport() }
+        .onChange(of: showGenres) { _, _ in resetViewport() }
+        .onChange(of: showGenres) { _, newValue in
+            showGenreToast(enabled: newValue)
+        }
         .onChange(of: densityMode) { _, _ in resetViewport() }
         .onChange(of: labelDensity) { _, _ in
             selectedNodeID = nil
@@ -189,6 +226,23 @@ struct ConstellationGraphView: View {
         .background(Color(.systemGray6))
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
+
+    private var genresTogglePill: some View {
+        HStack(spacing: 8) {
+            Text("Genres")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+
+            Toggle("Genres", isOn: $showGenres)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(.orange)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.black.opacity(0.42))
+        .clipShape(Capsule())
+    }
     
     // MARK: - Actions
     private func openNode(_ node: ConstellationGraphNode) {
@@ -201,22 +255,46 @@ struct ConstellationGraphView: View {
             if let idString = node.reference, let id = UUID(uuidString: idString) {
                 selectedTVShow = tvShows.first(where: { $0.id == id })
             }
+        case .book:
+            if let idString = node.reference, let id = UUID(uuidString: idString) {
+                selectedBook = books.first(where: { $0.id == id })
+            }
         case .theme:
             if let theme = node.reference {
                 selectedTheme = ConstellationThemeSelection(id: theme)
             }
+        case .genre:
+            break
         }
+    }
+
+    private func showGenreToast(enabled: Bool) {
+        genreToastWorkItem?.cancel()
+        withAnimation(.easeOut(duration: 0.2)) {
+            genreToastMessage = enabled ? "Genres On" : "Genres Off"
+        }
+        let work = DispatchWorkItem {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                genreToastMessage = nil
+            }
+        }
+        genreToastWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6, execute: work)
     }
     
     // MARK: - Graph Construction
-    private func buildGraph(themeFilter: String?, collectionFilter: String?, densityMode: ConstellationGraphDensityMode) -> ConstellationGraphData {
+    private func buildGraph(themeFilter: String?, collectionFilter: String?, densityMode: ConstellationGraphDensityMode, includeGenres: Bool) -> ConstellationGraphData {
         let recentMovieIDs = Set(movies.prefix(14).map { $0.id.uuidString })
         let recentShowIDs = Set(tvShows.prefix(14).map { $0.id.uuidString })
+        let recentBookIDs = Set(books.prefix(14).map { $0.id.uuidString })
         let collectionMovieIDs = Set(collections.flatMap(\.movieIDs))
         let collectionShowIDs = Set(collections.flatMap(\.showIDs))
+        let collectionBookIDs = Set(collections.flatMap(\.bookIDs))
         let movieCap = densityMode == .simple ? 10 : 18
         let showCap = densityMode == .simple ? 10 : 18
+        let bookCap = densityMode == .simple ? 10 : 18
         let themeCap = densityMode == .simple ? 6 : 12
+        let genreCap = densityMode == .simple ? 5 : 10
         
         var selectedMovies = Array(
             movies.filter { recentMovieIDs.contains($0.id.uuidString) || collectionMovieIDs.contains($0.id.uuidString) }
@@ -226,21 +304,30 @@ struct ConstellationGraphView: View {
             tvShows.filter { recentShowIDs.contains($0.id.uuidString) || collectionShowIDs.contains($0.id.uuidString) }
                 .prefix(showCap)
         )
+        var selectedBooks = Array(
+            books.filter { recentBookIDs.contains($0.id.uuidString) || collectionBookIDs.contains($0.id.uuidString) }
+                .prefix(bookCap)
+        )
         
         if let collectionFilter,
            let collection = collections.first(where: { $0.id.uuidString == collectionFilter }) {
             let movieSet = Set(collection.movieIDs)
             let showSet = Set(collection.showIDs)
+            let bookSet = Set(collection.bookIDs)
             selectedMovies = selectedMovies.filter { movieSet.contains($0.id.uuidString) }
             selectedShows = selectedShows.filter { showSet.contains($0.id.uuidString) }
+            selectedBooks = selectedBooks.filter { bookSet.contains($0.id.uuidString) }
         }
         
         if let themeFilter {
-            selectedMovies = selectedMovies.filter { $0.themes.contains(themeFilter) }
-            selectedShows = selectedShows.filter { $0.themes.contains(themeFilter) }
+            selectedMovies = selectedMovies.filter { normalizedThemes(for: $0).contains(themeFilter) }
+            selectedShows = selectedShows.filter { normalizedThemes(for: $0).contains(themeFilter) }
+            selectedBooks = selectedBooks.filter { normalizedThemes(for: $0).contains(themeFilter) }
         }
-        
-        let themeCounts = Dictionary(grouping: (selectedMovies.flatMap(\.themes) + selectedShows.flatMap(\.themes)), by: { $0 })
+
+        let themeCounts = Dictionary(grouping: (selectedMovies.flatMap(normalizedThemes(for:)) + selectedShows.flatMap(normalizedThemes(for:)) + selectedBooks.flatMap(normalizedThemes(for:))), by: { $0 })
+            .mapValues(\.count)
+        let genreCounts = Dictionary(grouping: (selectedMovies.flatMap(normalizedGenres(for:)) + selectedShows.flatMap(normalizedGenres(for:)) + selectedBooks.flatMap(normalizedGenres(for:))), by: { $0 })
             .mapValues(\.count)
         
         let topThemes: [String]
@@ -255,6 +342,19 @@ struct ConstellationGraphView: View {
                 .prefix(themeCap)
                 .map(\.key)
         }
+
+        let topGenres: [String]
+        if includeGenres {
+            topGenres = genreCounts
+                .sorted { lhs, rhs in
+                    if lhs.value == rhs.value { return lhs.key < rhs.key }
+                    return lhs.value > rhs.value
+                }
+                .prefix(genreCap)
+                .map(\.key)
+        } else {
+            topGenres = []
+        }
         
         var nodes: [ConstellationGraphNode] = []
         var edgeMeta: [String: ConstellationGraphEdgeAggregate] = [:]
@@ -268,34 +368,107 @@ struct ConstellationGraphView: View {
             let node = ConstellationGraphNode(id: "show::\(show.id.uuidString)", title: show.title, kind: .tvShow, reference: show.id.uuidString)
             nodes.append(node)
         }
+
+        for book in selectedBooks {
+            let node = ConstellationGraphNode(id: "book::\(book.id.uuidString)", title: book.title, kind: .book, reference: book.id.uuidString)
+            nodes.append(node)
+        }
         
         for theme in topThemes {
             let node = ConstellationGraphNode(id: "theme::\(theme)", title: theme, kind: .theme, reference: theme)
             nodes.append(node)
         }
-        
+
+        for genre in topGenres {
+            let node = ConstellationGraphNode(id: "genre::\(genre)", title: genre, kind: .genre, reference: genre)
+            nodes.append(node)
+        }
+
         let topThemeSet = Set(topThemes)
+        let topGenreSet = Set(topGenres)
         
         for movie in selectedMovies {
             let fromID = "movie::\(movie.id.uuidString)"
-            for theme in movie.themes where topThemeSet.contains(theme) {
+            for theme in normalizedThemes(for: movie) where topThemeSet.contains(theme) {
                 incrementEdge(fromID: fromID, toID: "theme::\(theme)", source: .theme, in: &edgeMeta)
             }
         }
-        
+
         for show in selectedShows {
             let fromID = "show::\(show.id.uuidString)"
-            for theme in show.themes where topThemeSet.contains(theme) {
+            for theme in normalizedThemes(for: show) where topThemeSet.contains(theme) {
                 incrementEdge(fromID: fromID, toID: "theme::\(theme)", source: .theme, in: &edgeMeta)
+            }
+        }
+
+        for book in selectedBooks {
+            let fromID = "book::\(book.id.uuidString)"
+            for theme in normalizedThemes(for: book) where topThemeSet.contains(theme) {
+                incrementEdge(fromID: fromID, toID: "theme::\(theme)", source: .theme, in: &edgeMeta)
+            }
+        }
+
+        for movie in selectedMovies {
+            let fromID = "movie::\(movie.id.uuidString)"
+            for genre in normalizedGenres(for: movie) where topGenreSet.contains(genre) {
+                incrementEdge(fromID: fromID, toID: "genre::\(genre)", source: .genre, in: &edgeMeta)
+            }
+        }
+
+        for show in selectedShows {
+            let fromID = "show::\(show.id.uuidString)"
+            for genre in normalizedGenres(for: show) where topGenreSet.contains(genre) {
+                incrementEdge(fromID: fromID, toID: "genre::\(genre)", source: .genre, in: &edgeMeta)
+            }
+        }
+
+        for book in selectedBooks {
+            let fromID = "book::\(book.id.uuidString)"
+            for genre in normalizedGenres(for: book) where topGenreSet.contains(genre) {
+                incrementEdge(fromID: fromID, toID: "genre::\(genre)", source: .genre, in: &edgeMeta)
+            }
+        }
+
+        if includeGenres {
+            for movie in selectedMovies {
+                let movieThemes = normalizedThemes(for: movie).filter { topThemeSet.contains($0) }
+                let movieGenres = normalizedGenres(for: movie).filter { topGenreSet.contains($0) }
+                for theme in movieThemes {
+                    for genre in movieGenres {
+                        incrementEdge(fromID: "theme::\(theme)", toID: "genre::\(genre)", source: .genre, in: &edgeMeta)
+                    }
+                }
+            }
+
+            for show in selectedShows {
+                let showThemes = normalizedThemes(for: show).filter { topThemeSet.contains($0) }
+                let showGenres = normalizedGenres(for: show).filter { topGenreSet.contains($0) }
+                for theme in showThemes {
+                    for genre in showGenres {
+                        incrementEdge(fromID: "theme::\(theme)", toID: "genre::\(genre)", source: .genre, in: &edgeMeta)
+                    }
+                }
+            }
+
+            for book in selectedBooks {
+                let bookThemes = normalizedThemes(for: book).filter { topThemeSet.contains($0) }
+                let bookGenres = normalizedGenres(for: book).filter { topGenreSet.contains($0) }
+                for theme in bookThemes {
+                    for genre in bookGenres {
+                        incrementEdge(fromID: "theme::\(theme)", toID: "genre::\(genre)", source: .genre, in: &edgeMeta)
+                    }
+                }
             }
         }
         
         let movieIDs = Set(selectedMovies.map { $0.id.uuidString })
         let showIDs = Set(selectedShows.map { $0.id.uuidString })
+        let bookIDs = Set(selectedBooks.map { $0.id.uuidString })
         
         for collection in collections {
             let members = (collection.movieIDs.filter { movieIDs.contains($0) }.map { "movie::\($0)" }
-                + collection.showIDs.filter { showIDs.contains($0) }.map { "show::\($0)" })
+                + collection.showIDs.filter { showIDs.contains($0) }.map { "show::\($0)" }
+                + collection.bookIDs.filter { bookIDs.contains($0) }.map { "book::\($0)" })
             
             guard members.count >= 2 else { continue }
             
@@ -356,6 +529,50 @@ struct ConstellationGraphView: View {
         current.source = current.source.merged(with: source)
         storage[key] = current
     }
+
+    private func normalizedThemes(for movie: Movie) -> [String] {
+        ThemeExtractor.shared.normalizeThemes(movie.themes)
+    }
+
+    private func normalizedThemes(for show: TVShow) -> [String] {
+        ThemeExtractor.shared.normalizeThemes(show.themes)
+    }
+
+    private func normalizedThemes(for book: Book) -> [String] {
+        ThemeExtractor.shared.normalizeThemes(book.themes)
+    }
+
+    private func normalizedGenres(for movie: Movie) -> [String] {
+        normalizeGenres(movie.genres)
+    }
+
+    private func normalizedGenres(for show: TVShow) -> [String] {
+        normalizeGenres(show.genres)
+    }
+
+    private func normalizedGenres(for book: Book) -> [String] {
+        normalizeGenres(book.genres)
+    }
+
+    private func normalizeGenres(_ rawGenres: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for genre in rawGenres {
+            let normalized = genre
+                .lowercased()
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "&", with: " and ")
+                .replacingOccurrences(of: #"[^\p{L}\p{N}\s-]"#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: #"\s+"#, with: "-", options: .regularExpression)
+                .replacingOccurrences(of: #"-+"#, with: "-", options: .regularExpression)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+            guard normalized.count >= 3 else { continue }
+            guard !seen.contains(normalized) else { continue }
+            seen.insert(normalized)
+            result.append(normalized)
+        }
+        return result
+    }
     
     private func computeDynamicPositions(
         nodes: [ConstellationGraphNode],
@@ -365,14 +582,14 @@ struct ConstellationGraphView: View {
     ) -> [String: CGPoint] {
         var positions: [String: CGPoint] = [:]
         
-        let themes = nodes.filter { $0.kind == .theme }.sorted { $0.id < $1.id }
-        let media = nodes.filter { $0.kind != .theme }.sorted { $0.id < $1.id }
+        let coreNodes = nodes.filter { $0.kind == .theme || $0.kind == .genre }.sorted { $0.id < $1.id }
+        let media = nodes.filter { $0.kind == .movie || $0.kind == .tvShow || $0.kind == .book }.sorted { $0.id < $1.id }
         let adjacency = buildAdjacency(edges: edges)
         
         // Focused mode: one chosen theme in center, connected media around it.
         if let themeFilter {
             let focusedThemeID = "theme::\(themeFilter)"
-            if themes.contains(where: { $0.id == focusedThemeID }) {
+            if coreNodes.contains(where: { $0.id == focusedThemeID }) {
                 positions[focusedThemeID] = .zero
                 
                 let connectedMedia = media.filter { adjacency[$0.id, default: []].contains(focusedThemeID) }
@@ -389,18 +606,18 @@ struct ConstellationGraphView: View {
             }
         }
         
-        // Collection-focused mode: keep theme core, but tighten members.
+        // Collection-focused mode: keep core (themes + genres), but tighten members.
         if collectionFilter != nil {
-            for (index, theme) in themes.enumerated() {
-                positions[theme.id] = ringPosition(index: index, total: max(themes.count, 1), radius: 0.36, phase: .pi / 11)
+            for (index, coreNode) in coreNodes.enumerated() {
+                positions[coreNode.id] = ringPosition(index: index, total: max(coreNodes.count, 1), radius: 0.36, phase: .pi / 11)
             }
             
-            let themedMedia = media.filter { !adjacency[$0.id, default: []].isDisjoint(with: Set(themes.map(\.id))) }
+            let themedMedia = media.filter { !adjacency[$0.id, default: []].isDisjoint(with: Set(coreNodes.map(\.id))) }
             let themedIDs = Set(themedMedia.map(\.id))
             let plainMedia = media.filter { !themedIDs.contains($0.id) }
             
             for (index, item) in themedMedia.enumerated() {
-                let anchor = nearestThemeID(for: item.id, themes: themes, adjacency: adjacency) ?? themes.first?.id
+                let anchor = nearestCoreNodeID(for: item.id, coreNodes: coreNodes, adjacency: adjacency) ?? coreNodes.first?.id
                 let center = anchor.flatMap { positions[$0] } ?? .zero
                 let local = ringPosition(index: index, total: max(themedMedia.count, 1), radius: 0.2, phase: deterministicPhase(for: item.id))
                 positions[item.id] = CGPoint(x: center.x + local.x, y: center.y + local.y)
@@ -413,26 +630,30 @@ struct ConstellationGraphView: View {
             return resolveNodeOverlaps(positions: positions, nodes: nodes)
         }
         
-        // General mode: themes in core, media clustered around their strongest theme.
-        for (index, theme) in themes.enumerated() {
-            positions[theme.id] = ringPosition(index: index, total: max(themes.count, 1), radius: 0.37, phase: .pi / 12)
+        // General mode: core nodes in center, media clustered around nearest core node.
+        for (index, coreNode) in coreNodes.enumerated() {
+            positions[coreNode.id] = ringPosition(index: index, total: max(coreNodes.count, 1), radius: 0.37, phase: .pi / 12)
         }
         
-        if themes.isEmpty {
+        if coreNodes.isEmpty {
             let movies = media.filter { $0.kind == .movie }
             let shows = media.filter { $0.kind == .tvShow }
+            let books = media.filter { $0.kind == .book }
             for (index, item) in movies.enumerated() {
                 positions[item.id] = ringPosition(index: index, total: max(movies.count, 1), radius: 0.74, phase: 0)
             }
             for (index, item) in shows.enumerated() {
                 positions[item.id] = ringPosition(index: index, total: max(shows.count, 1), radius: 0.9, phase: .pi / 8)
             }
+            for (index, item) in books.enumerated() {
+                positions[item.id] = ringPosition(index: index, total: max(books.count, 1), radius: 0.82, phase: .pi / 5)
+            }
             return resolveNodeOverlaps(positions: positions, nodes: nodes)
         }
         
         var byAnchor: [String: [ConstellationGraphNode]] = [:]
         for item in media {
-            let anchor = nearestThemeID(for: item.id, themes: themes, adjacency: adjacency) ?? "unassigned"
+            let anchor = nearestCoreNodeID(for: item.id, coreNodes: coreNodes, adjacency: adjacency) ?? "unassigned"
             byAnchor[anchor, default: []].append(item)
         }
         
@@ -444,8 +665,8 @@ struct ConstellationGraphView: View {
             if anchor == "unassigned" {
                 clusterCenter = CGPoint(x: 0, y: 0)
             } else {
-                let themeCenter = positions[anchor] ?? .zero
-                clusterCenter = CGPoint(x: themeCenter.x * 1.28, y: themeCenter.y * 1.28)
+                let coreCenter = positions[anchor] ?? .zero
+                clusterCenter = CGPoint(x: coreCenter.x * 1.28, y: coreCenter.y * 1.28)
             }
             
             for (index, item) in items.enumerated() {
@@ -471,14 +692,14 @@ struct ConstellationGraphView: View {
         return adjacency
     }
     
-    private func nearestThemeID(for mediaID: String, themes: [ConstellationGraphNode], adjacency: [String: Set<String>]) -> String? {
-        let neighborThemes = adjacency[mediaID, default: []]
-            .filter { $0.hasPrefix("theme::") }
+    private func nearestCoreNodeID(for mediaID: String, coreNodes: [ConstellationGraphNode], adjacency: [String: Set<String>]) -> String? {
+        let neighborCoreNodes = adjacency[mediaID, default: []]
+            .filter { $0.hasPrefix("theme::") || $0.hasPrefix("genre::") }
             .sorted()
-        if let direct = neighborThemes.first {
+        if let direct = neighborCoreNodes.first {
             return direct
         }
-        return themes.first?.id
+        return coreNodes.first?.id
     }
     
     private func deterministicPhase(for id: String) -> CGFloat {
@@ -513,7 +734,7 @@ struct ConstellationGraphView: View {
                         distance = 1
                     }
                     
-                    let isCrossType = kindByID[aID] == .theme || kindByID[bID] == .theme
+                    let isCrossType = kindByID[aID] == .theme || kindByID[bID] == .theme || kindByID[aID] == .genre || kindByID[bID] == .genre
                     let minDistance: CGFloat = isCrossType ? 0.18 : 0.13
                     guard distance < minDistance else { continue }
                     
@@ -594,6 +815,7 @@ private struct ImmersiveConstellationView: View {
     @Binding var filter: ConstellationGraphFilter
     @Binding var labelDensity: ConstellationGraphLabelDensity
     @Binding var densityMode: ConstellationGraphDensityMode
+    @Binding var showGenres: Bool
     @Binding var selectedThemeFilter: String
     @Binding var selectedCollectionFilter: String
     let themeOptions: [String]
@@ -697,6 +919,16 @@ private struct ImmersiveConstellationView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+
+                Toggle(isOn: $showGenres) {
+                    Text("Show Genres")
+                        .font(.caption)
+                        .foregroundStyle(.white)
+                }
+                .toggleStyle(.switch)
+                .tint(.orange)
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
                 

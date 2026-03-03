@@ -14,6 +14,7 @@ struct CollectionDetailView: View {
     
     @Query private var movies: [Movie]
     @Query private var tvShows: [TVShow]
+    @Query private var books: [Book]
     
     @State private var showingAddItems = false
     @State private var showingEditMetadata = false
@@ -27,6 +28,11 @@ struct CollectionDetailView: View {
     var collectionTVShows: [TVShow] {
         let ids = Set(collection.showIDs)
         return tvShows.filter { ids.contains($0.id.uuidString) }
+    }
+
+    var collectionBooks: [Book] {
+        let ids = Set(collection.bookIDs)
+        return books.filter { ids.contains($0.id.uuidString) }
     }
     
     var body: some View {
@@ -88,7 +94,7 @@ struct CollectionDetailView: View {
                         Label("Generate Insight", systemImage: "brain")
                     }
                 }
-                .disabled(generatingInsight || (collectionMovies.isEmpty && collectionTVShows.isEmpty))
+                .disabled(generatingInsight || (collectionMovies.isEmpty && collectionTVShows.isEmpty && collectionBooks.isEmpty))
             }
             
             if !collectionMovies.isEmpty {
@@ -150,13 +156,51 @@ struct CollectionDetailView: View {
                     }
                 }
             }
+
+            if !collectionBooks.isEmpty {
+                Section("Books") {
+                    ForEach(collectionBooks) { book in
+                        NavigationLink(destination: BookDetailView(book: book)) {
+                            HStack(spacing: 12) {
+                                PosterThumb(urlString: book.coverURL, fallback: "📚")
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(book.title)
+                                        .font(.headline)
+
+                                    HStack(spacing: 8) {
+                                        if let year = book.year {
+                                            Text(String(year))
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        if let author = book.author {
+                                            Text(author)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                removeBook(book)
+                            } label: {
+                                Label("Remove", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+            }
             
-            if collectionMovies.isEmpty && collectionTVShows.isEmpty {
+            if collectionMovies.isEmpty && collectionTVShows.isEmpty && collectionBooks.isEmpty {
                 Section {
                     ContentUnavailableView(
                         "No Items Yet",
                         systemImage: "tray",
-                        description: Text("Add movies or TV shows to this collection.")
+                        description: Text("Add movies, TV shows, or books to this collection.")
                     )
                 }
             }
@@ -194,13 +238,20 @@ struct CollectionDetailView: View {
         collection.aiInsight = nil
         try? modelContext.save()
     }
+
+    private func removeBook(_ book: Book) {
+        collection.removeItem(id: book.id, type: .book)
+        collection.aiInsight = nil
+        try? modelContext.save()
+    }
     
     private func generateInsight() async {
         generatingInsight = true
         let insight = await SynthesisEngine.shared.generateCollectionInsight(
             collectionName: collection.name,
             movies: collectionMovies,
-            tvShows: collectionTVShows
+            tvShows: collectionTVShows,
+            books: collectionBooks
         )
         collection.aiInsight = insight
         try? modelContext.save()
@@ -241,6 +292,7 @@ struct AddItemsToCollectionView: View {
     @Bindable var collection: ItemCollection
     @Query(sort: \Movie.title) private var movies: [Movie]
     @Query(sort: \TVShow.title) private var tvShows: [TVShow]
+    @Query(sort: \Book.title) private var books: [Book]
     
     @State private var searchText = ""
     
@@ -252,6 +304,11 @@ struct AddItemsToCollectionView: View {
     var filteredTVShows: [TVShow] {
         guard !searchText.isEmpty else { return tvShows }
         return tvShows.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
+    }
+
+    var filteredBooks: [Book] {
+        guard !searchText.isEmpty else { return books }
+        return books.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
     }
     
     var body: some View {
@@ -282,6 +339,21 @@ struct AddItemsToCollectionView: View {
                                 fallbackIcon: "📺"
                             ) {
                                 toggleTVShow(show)
+                            }
+                        }
+                    }
+                }
+
+                if !filteredBooks.isEmpty {
+                    Section("Books") {
+                        ForEach(filteredBooks) { book in
+                            selectableRow(
+                                title: book.title,
+                                subtitle: book.author ?? book.year.map(String.init),
+                                selected: collection.contains(id: book.id, type: .book),
+                                fallbackIcon: "📚"
+                            ) {
+                                toggleBook(book)
                             }
                         }
                     }
@@ -353,6 +425,14 @@ struct AddItemsToCollectionView: View {
             collection.removeItem(id: show.id, type: .tvShow)
         } else {
             collection.addItem(id: show.id, type: .tvShow)
+        }
+    }
+
+    private func toggleBook(_ book: Book) {
+        if collection.contains(id: book.id, type: .book) {
+            collection.removeItem(id: book.id, type: .book)
+        } else {
+            collection.addItem(id: book.id, type: .book)
         }
     }
 }
