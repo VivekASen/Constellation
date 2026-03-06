@@ -2,14 +2,13 @@ import SwiftUI
 import SwiftData
 
 struct BookSearchView: View {
-    @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
-    @Query private var existingBooks: [Book]
 
     @State private var searchText = ""
-    @State private var searchResults: [OpenLibraryBook] = []
+    @State private var searchResults: [HardcoverBooksService.SearchBook] = []
     @State private var isSearching = false
-    @State private var selectedBook: OpenLibraryBook?
+    @State private var selectedBook: HardcoverBooksService.SearchBook?
+    @State private var searchErrorMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -17,17 +16,23 @@ struct BookSearchView: View {
                 if isSearching {
                     ProgressView("Searching books...")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let searchErrorMessage {
+                    ContentUnavailableView(
+                        "Search Error",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text(searchErrorMessage)
+                    )
                 } else if searchResults.isEmpty && !searchText.isEmpty {
                     ContentUnavailableView(
                         "No Results",
                         systemImage: "book",
-                        description: Text("Try a different query")
+                        description: Text("Try another title or author")
                     )
                 } else if searchResults.isEmpty {
                     ContentUnavailableView(
                         "Search for Books",
                         systemImage: "books.vertical",
-                        description: Text("Find and add books to your constellation")
+                        description: Text("Powered by Hardcover")
                     )
                 } else {
                     ScrollView {
@@ -62,24 +67,27 @@ struct BookSearchView: View {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             searchResults = []
+            searchErrorMessage = nil
             return
         }
 
         isSearching = true
+        searchErrorMessage = nil
         defer { isSearching = false }
 
         do {
-            try await Task.sleep(nanoseconds: 350_000_000)
+            try await Task.sleep(nanoseconds: 320_000_000)
             guard trimmed == searchText.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
-            searchResults = try await OpenLibraryService.shared.searchBooks(query: trimmed)
+            searchResults = try await HardcoverBooksService.shared.searchBooks(query: trimmed)
         } catch {
             searchResults = []
+            searchErrorMessage = error.localizedDescription
         }
     }
 }
 
 private struct BookSearchCard: View {
-    let book: OpenLibraryBook
+    let book: HardcoverBooksService.SearchBook
 
     var body: some View {
         HStack(spacing: 12) {
@@ -97,12 +105,14 @@ private struct BookSearchCard: View {
                 Text(book.title)
                     .font(.headline)
                     .lineLimit(2)
+
                 if let author = book.author {
                     Text(author)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+
                 HStack(spacing: 8) {
                     if let year = book.year {
                         Text(String(year))
@@ -113,6 +123,11 @@ private struct BookSearchCard: View {
                         Text("\(pages) pages")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+                    if let rating = book.rating {
+                        Text("★ \(String(format: "%.1f", rating))")
+                            .font(.caption)
+                            .foregroundStyle(.yellow)
                     }
                 }
             }
@@ -130,16 +145,15 @@ private struct BookDetailSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Query private var existingBooks: [Book]
 
-    let book: OpenLibraryBook
-    @State private var addStatus: AddStatus = .watchlist
+    let book: HardcoverBooksService.SearchBook
+    @State private var addStatus: AddStatus = .planned
     @State private var readDate = Date()
     @State private var notes = ""
-    @State private var rating: Double = 0
     @State private var showDuplicateAlert = false
 
     private enum AddStatus: String, CaseIterable, Identifiable {
-        case watchlist
-        case watched
+        case planned
+        case completed
         var id: String { rawValue }
     }
 
@@ -171,12 +185,23 @@ private struct BookDetailSheet: View {
                         if let pages = book.pageCount {
                             Text("\(pages) pages").font(.caption).foregroundStyle(.secondary)
                         }
+                        if let rating = book.rating {
+                            if let count = book.ratingCount {
+                                Text("★ \(String(format: "%.1f", rating)) (\(count))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("★ \(String(format: "%.1f", rating))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
 
                     if !book.subjects.isEmpty {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack {
-                                ForEach(book.subjects, id: \.self) { subject in
+                                ForEach(book.subjects.prefix(5), id: \.self) { subject in
                                     Text(subject)
                                         .font(.caption)
                                         .padding(.horizontal, 10)
@@ -192,21 +217,13 @@ private struct BookDetailSheet: View {
                     Divider()
 
                     Picker("Status", selection: $addStatus) {
-                        Text("To Read").tag(AddStatus.watchlist)
-                        Text("Read").tag(AddStatus.watched)
+                        Text("Planned").tag(AddStatus.planned)
+                        Text("Completed").tag(AddStatus.completed)
                     }
                     .pickerStyle(.segmented)
 
-                    if addStatus == .watched {
-                        DatePicker("Read Date", selection: $readDate, displayedComponents: .date)
-                        HStack(spacing: 8) {
-                            ForEach(1...5, id: \.self) { star in
-                                Image(systemName: star <= Int(rating) ? "star.fill" : "star")
-                                    .foregroundStyle(.yellow)
-                                    .onTapGesture { rating = Double(star) }
-                            }
-                        }
-                        .font(.title3)
+                    if addStatus == .completed {
+                        DatePicker("Completed Date", selection: $readDate, displayedComponents: .date)
                     }
 
                     TextEditor(text: $notes)
@@ -224,9 +241,7 @@ private struct BookDetailSheet: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(addStatus == .watchlist ? "Add to Readlist" : "Add as Read") {
-                        addBook()
-                    }
+                    Button("Add") { addBook() }
                 }
             }
             .alert("Already Added", isPresented: $showDuplicateAlert) {
@@ -240,39 +255,49 @@ private struct BookDetailSheet: View {
     private func addBook() {
         let normalizedTitle = book.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let duplicateExists = existingBooks.contains { existing in
-            if let existingWorkKey = existing.openLibraryWorkKey, existingWorkKey == book.key { return true }
-            let yearMatches = existing.year == nil || book.year == nil || existing.year == book.year
-            return existing.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedTitle && yearMatches
+            if let isbn = book.isbn, !isbn.isEmpty, existing.isbn == isbn { return true }
+            return existing.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedTitle
         }
+
         if duplicateExists {
             showDuplicateAlert = true
             return
         }
 
-        let isRead = addStatus == .watched
+        let thriftLink: String?
+        if let isbn = book.isbn {
+            let cleaned = isbn.filter { $0.isNumber || $0 == "X" || $0 == "x" }
+            if cleaned.isEmpty {
+                thriftLink = nil
+            } else {
+                let encoded = cleaned.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? cleaned
+                thriftLink = "https://www.thriftbooks.com/browse/?b.search=\(encoded)"
+            }
+        } else {
+            thriftLink = nil
+        }
+
         let newBook = Book(
             title: book.title,
             year: book.year,
             author: book.author,
             coverURL: book.coverURL?.absoluteString,
-            overview: nil,
-            genres: book.subjects,
+            overview: book.description,
+            genres: book.primaryGenre.map { [$0] } ?? book.subjects,
             pageCount: book.pageCount,
-            rating: isRead && rating > 0 ? rating : nil,
-            watchedDate: isRead ? readDate : nil,
+            rating: book.rating,
+            ratingCount: book.ratingCount,
+            watchedDate: addStatus == .completed ? readDate : nil,
             notes: notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notes,
-            openLibraryWorkKey: book.key,
-            isbn: book.isbn
+            isbn: book.isbn,
+            infoURL: book.slug.flatMap { "https://hardcover.app/books/\($0)" },
+            thriftBooksURL: thriftLink,
+            hasAudiobook: book.hasAudiobook,
+            hasEbook: book.hasEbook
         )
 
         modelContext.insert(newBook)
-
-        Task {
-            let themes = await ThemeExtractor.shared.extractThemes(from: newBook)
-            newBook.themes = themes
-            try? modelContext.save()
-        }
-
+        try? modelContext.save()
         dismiss()
     }
 }

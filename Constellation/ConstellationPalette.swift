@@ -8,6 +8,8 @@ enum ConstellationPalette {
     static let cosmicPurple = Color(red: 0.16, green: 0.11, blue: 0.30)
     static let surface = Color.white.opacity(0.90)
     static let surfaceStrong = Color.white.opacity(0.95)
+    // Backward-compatible aliases used by in-flight UI files.
+    static let card = surface
+    static let cardStrong = surfaceStrong
     static let border = Color.white.opacity(0.20)
 }
-

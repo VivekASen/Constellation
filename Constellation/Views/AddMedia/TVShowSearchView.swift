@@ -467,12 +467,7 @@ struct TVShowDetailSheet: View {
         )
         
         modelContext.insert(newShow)
-        
-        Task {
-            let themes = await ThemeExtractor.shared.extractThemes(from: newShow)
-            newShow.themes = themes
-            try? modelContext.save()
-        }
+        try? modelContext.save()
         
         dismiss()
     }

@@ -15,6 +15,8 @@ struct ConstellationApp: App {
             Movie.self,
             TVShow.self,
             Book.self,
+            PodcastEpisode.self,
+            PodcastHighlight.self,
             Theme.self,
             ItemCollection.self
         ])

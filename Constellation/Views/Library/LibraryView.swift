@@ -3,52 +3,213 @@ import SwiftData
 
 struct LibraryView: View {
     @Environment(\.modelContext) private var modelContext
+
     @Query(sort: \Movie.dateAdded, order: .reverse) private var movies: [Movie]
     @Query(sort: \TVShow.dateAdded, order: .reverse) private var tvShows: [TVShow]
     @Query(sort: \Book.dateAdded, order: .reverse) private var books: [Book]
+    @Query(sort: \PodcastEpisode.dateAdded, order: .reverse) private var podcastEpisodes: [PodcastEpisode]
 
-    @State private var mode: LibraryMode = .all
-    @State private var filter: LibraryMediaFilter = .all
-    @State private var sortOption: LibrarySortOption = .recentlyAdded
-    @State private var selectedTheme: String = "all"
+    @State private var filterState = LibraryFilterState()
+    @State private var searchText = ""
     @State private var activeSheet: AddMediaSheet?
-    @State private var markWatchedTarget: LibraryItem?
-    @State private var watchedDate = Date()
-    @State private var watchedRating = 0.0
+    @State private var showingFilterSheet = false
+
+    private var podcastShowGroups: [PodcastLibraryShowGroup] {
+        Dictionary(grouping: podcastEpisodes, by: { $0.showName.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .map { name, episodes in
+                let sorted = episodes.sorted { ($0.releaseDate ?? $0.dateAdded) > ($1.releaseDate ?? $1.dateAdded) }
+                return PodcastLibraryShowGroup(
+                    name: name,
+                    episodes: sorted,
+                    feedID: sorted.compactMap(\.podcastIndexFeedID).first,
+                    feedURL: sorted.compactMap(\.feedURL).first,
+                    artworkURL: sorted.compactMap(\.thumbnailURL).first
+                )
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var baseEntries: [LibraryEntry] {
+        var entries: [LibraryEntry] = []
+        entries.append(contentsOf: movies.map(LibraryEntry.movie))
+        entries.append(contentsOf: tvShows.map(LibraryEntry.tvShow))
+        entries.append(contentsOf: books.map(LibraryEntry.book))
+        entries.append(contentsOf: podcastShowGroups.map(LibraryEntry.podcastShow))
+        return entries
+    }
+
+    private var filteredEntries: [LibraryEntry] {
+        var entries = baseEntries
+
+        if filterState.type != .all {
+            entries = entries.filter { $0.filterType == filterState.type }
+        }
+
+        if filterState.status != .all {
+            entries = entries.filter { entry in
+                switch filterState.status {
+                case .all:
+                    return true
+                case .inProgress:
+                    return entry.isInProgress
+                case .completed:
+                    return entry.isCompleted
+                }
+            }
+        }
+
+        if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            entries = entries.filter { entry in
+                entry.searchIndex.contains { $0.contains(query) }
+            }
+        }
+
+        switch filterState.sort {
+        case .recentlyAdded:
+            entries.sort { $0.dateAdded > $1.dateAdded }
+        case .recentActivity:
+            entries.sort { $0.activityDate > $1.activityDate }
+        case .titleAZ:
+            entries.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        case .highestRated:
+            entries.sort { ($0.publicRating ?? -1) > ($1.publicRating ?? -1) }
+        }
+
+        return entries
+    }
+
+    private var groupedEntries: [(String, [LibraryEntry])] {
+        guard filterState.groupByType else {
+            return [("Library", filteredEntries)]
+        }
+
+        let groups = Dictionary(grouping: filteredEntries, by: { $0.groupLabel })
+        let ordered = ["Movies", "TV Shows", "Books", "Podcasts"]
+        return ordered.compactMap { key in
+            guard let values = groups[key], !values.isEmpty else { return nil }
+            return (key, values)
+        }
+    }
+
+    private var suggestions: [LibrarySearchSuggestion] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return [] }
+
+        var items: [LibrarySearchSuggestion] = []
+
+        for show in podcastShowGroups {
+            let label = show.name
+            if label.lowercased().contains(query) {
+                items.append(.show(name: label))
+            }
+        }
+
+        for episode in podcastEpisodes {
+            if episode.title.lowercased().contains(query) {
+                items.append(.episode(title: episode.title, showName: episode.showName))
+            }
+        }
+
+        for title in movies.map(\.title) where title.lowercased().contains(query) {
+            items.append(.item(title: title, type: .movies))
+        }
+        for title in tvShows.map(\.title) where title.lowercased().contains(query) {
+            items.append(.item(title: title, type: .tv))
+        }
+        for title in books.map(\.title) where title.lowercased().contains(query) {
+            items.append(.item(title: title, type: .books))
+        }
+
+        var seen = Set<String>()
+        return items.filter { seen.insert($0.id).inserted }.prefix(10).map { $0 }
+    }
+
+    private var matchedPodcastEpisodes: [PodcastEpisode] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return [] }
+        return podcastEpisodes
+            .filter { episode in
+                episode.title.lowercased().contains(query)
+                    || episode.showName.lowercased().contains(query)
+            }
+            .sorted { ($0.releaseDate ?? $0.dateAdded) > ($1.releaseDate ?? $1.dateAdded) }
+            .prefix(8)
+            .map { $0 }
+    }
 
     var body: some View {
         NavigationStack {
-            List {
-                modePickerSection
-                mediaFilterSection
-                sortAndThemeSection
-                statsSection
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    headerControls
 
-                if mode == .watched, !favoriteItems.isEmpty {
-                    Section("Favorites") {
-                        ForEach(favoriteItems) { item in
-                            itemRow(item)
+                    if filteredEntries.isEmpty {
+                        ContentUnavailableView(
+                            "No Matches",
+                            systemImage: "sparkles",
+                            description: Text("Try adjusting filters or search.")
+                        )
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 40)
+                    } else {
+                        ForEach(groupedEntries, id: \.0) { section in
+                            VStack(alignment: .leading, spacing: 10) {
+                                if filterState.groupByType {
+                                    Text(section.0)
+                                        .font(ConstellationTypeScale.sectionTitle)
+                                        .padding(.horizontal, 4)
+                                }
+
+                                ForEach(section.1) { entry in
+                                    entryCard(entry)
+                                }
+                            }
+                        }
+
+                        if !matchedPodcastEpisodes.isEmpty {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Matching Episodes")
+                                    .font(ConstellationTypeScale.sectionTitle)
+                                    .padding(.horizontal, 4)
+
+                                ForEach(matchedPodcastEpisodes) { episode in
+                                    NavigationLink(destination: PodcastEpisodeDetailView(episode: episode)) {
+                                        MediaLibraryCard(
+                                            title: episode.title,
+                                            subtitle: episode.showName,
+                                            posterURL: episode.thumbnailURL,
+                                            typeLabel: "Episode",
+                                            typeColor: .purple,
+                                            progressLabel: episode.completedAt == nil ? "In Progress" : "Completed",
+                                            ratingLine: nil,
+                                            themesHint: episode.themes.isEmpty ? "No themes yet" : episode.themes.prefix(3).map(displayTheme).joined(separator: " · ")
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
                         }
                     }
                 }
-
-                Section(mode.sectionTitle) {
-                    if visibleItems.isEmpty {
-                        ContentUnavailableView(
-                            mode.emptyTitle,
-                            systemImage: mode.emptyIcon,
-                            description: Text(mode.emptyDescription)
-                        )
-                        .listRowBackground(Color.clear)
-                    } else {
-                        ForEach(visibleItems) { item in
-                            itemRow(item)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 24)
+            }
+            .background(ConstellationPalette.surface.opacity(0.5))
+            .navigationTitle("Library")
+            .searchable(text: $searchText, prompt: "Search your library") {
+                ForEach(suggestions) { suggestion in
+                    Button {
+                        searchText = suggestion.queryText
+                    } label: {
+                        HStack {
+                            Image(systemName: suggestion.icon)
+                            Text(suggestion.displayText)
                         }
                     }
                 }
             }
-            .listStyle(.insetGrouped)
-            .navigationTitle("Library")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -69,6 +230,12 @@ struct LibraryView: View {
                         } label: {
                             Label("Add Book", systemImage: "book.closed.fill")
                         }
+
+                        Button {
+                            activeSheet = .podcast
+                        } label: {
+                            Label("Add Podcast", systemImage: "mic.fill")
+                        }
                     } label: {
                         Label("Add", systemImage: "plus")
                     }
@@ -82,559 +249,520 @@ struct LibraryView: View {
                     TVShowSearchView()
                 case .book:
                     BookSearchView()
+                case .podcast:
+                    PodcastSearchView()
                 }
             }
-            .sheet(item: $markWatchedTarget) { target in
-                NavigationStack {
-                    Form {
-                        Section("Mark as Watched") {
-                            Text(target.title)
-                            DatePicker("Watched Date", selection: $watchedDate, displayedComponents: .date)
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Your Rating (optional)")
-                                HStack(spacing: 8) {
-                                    ForEach(1...5, id: \.self) { star in
-                                        Image(systemName: star <= Int(watchedRating) ? "star.fill" : "star")
-                                            .foregroundStyle(.yellow)
-                                            .onTapGesture {
-                                                watchedRating = Double(star)
-                                            }
-                                    }
-                                }
-                                .font(.title3)
-                            }
-                        }
+            .sheet(isPresented: $showingFilterSheet) {
+                LibraryFilterSheet(state: $filterState)
+            }
+        }
+    }
+
+    private var headerControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Button {
+                    showingFilterSheet = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "line.3.horizontal.decrease.circle")
+                        Text("Advanced")
+                            .font(ConstellationTypeScale.supporting.weight(.semibold))
                     }
-                    .navigationTitle("Watched")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Cancel") {
-                                markWatchedTarget = nil
-                            }
-                        }
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Save") {
-                                applyWatched(target: target)
-                                markWatchedTarget = nil
-                            }
-                        }
-                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(Color.white.opacity(0.9))
+                    .clipShape(Capsule())
                 }
-            }
-            .onChange(of: mode) { _, _ in
-                reconcileThemeFilter()
-            }
-            .onChange(of: filter) { _, _ in
-                reconcileThemeFilter()
-            }
-        }
-    }
+                .buttonStyle(.plain)
 
-    private var modePickerSection: some View {
-        Section {
-            Picker("Mode", selection: $mode) {
-                Text("All").tag(LibraryMode.all)
-                Text("Watchlist").tag(LibraryMode.watchlist)
-                Text("Watched").tag(LibraryMode.watched)
-            }
-            .pickerStyle(.segmented)
-        }
-    }
-
-    private var mediaFilterSection: some View {
-        Section {
-            Picker("Type", selection: $filter) {
-                Text("All").tag(LibraryMediaFilter.all)
-                Text("Movies").tag(LibraryMediaFilter.movies)
-                Text("TV").tag(LibraryMediaFilter.tv)
-                Text("Books").tag(LibraryMediaFilter.books)
-            }
-            .pickerStyle(.segmented)
-        }
-    }
-
-    private var sortAndThemeSection: some View {
-        Section {
-            HStack {
-                Label("Sort", systemImage: "arrow.up.arrow.down")
                 Spacer()
-                Picker("Sort", selection: $sortOption) {
-                    ForEach(LibrarySortOption.allCases) { option in
-                        Text(option.label).tag(option)
-                    }
-                }
-                .pickerStyle(.menu)
+
+                Text(filterSummary)
+                    .font(ConstellationTypeScale.caption)
+                    .foregroundStyle(.secondary)
             }
 
-            HStack {
-                Label("Theme", systemImage: "sparkles")
-                Spacer()
-                Picker("Theme", selection: $selectedTheme) {
-                    Text("All Themes").tag("all")
-                    ForEach(availableThemes, id: \.self) { theme in
-                        Text(theme.replacingOccurrences(of: "-", with: " ").capitalized).tag(theme)
-                    }
-                }
-                .pickerStyle(.menu)
+            HStack(spacing: 8) {
+                quickPill("All", selected: filterState.type == .all) { filterState.type = .all }
+                quickPill("Movies", selected: filterState.type == .movies) { filterState.type = .movies }
+                quickPill("TV", selected: filterState.type == .tv) { filterState.type = .tv }
+                quickPill("Books", selected: filterState.type == .books) { filterState.type = .books }
+                quickPill("Podcasts", selected: filterState.type == .podcasts) { filterState.type = .podcasts }
             }
         }
     }
 
-    private var statsSection: some View {
-        Section {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    metricCard(
-                        title: "Watchlist",
-                        value: "\(watchlistItems.count)",
-                        subtitle: "Items to watch",
-                        tint: .blue
-                    )
-                    metricCard(
-                        title: "Watched",
-                        value: "\(watchedItems.count)",
-                        subtitle: "Completed",
-                        tint: .green
-                    )
-                    metricCard(
-                        title: "Top Rated",
-                        value: topRatedValue,
-                        subtitle: topRatedSubtitle,
-                        tint: .yellow
-                    )
-                }
-                .padding(.vertical, 4)
-            }
+    private func quickPill(_ text: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(text)
+                .font(ConstellationTypeScale.caption.weight(.semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(selected ? ConstellationPalette.accent.opacity(0.16) : Color.white.opacity(0.8))
+                .foregroundStyle(selected ? ConstellationPalette.accent : .secondary)
+                .clipShape(Capsule())
         }
+        .buttonStyle(.plain)
     }
 
-    private var allItems: [LibraryItem] {
-        let movieItems = movies.map(LibraryItem.movie)
-        let showItems = tvShows.map(LibraryItem.tvShow)
-        let bookItems = books.map(LibraryItem.book)
-        return applyFilter(movieItems + showItems + bookItems)
-    }
-
-    private var watchlistItems: [LibraryItem] {
-        allItems.filter { !$0.isWatched }
-    }
-
-    private var watchedItems: [LibraryItem] {
-        allItems.filter(\.isWatched)
-    }
-
-    private var favoriteItems: [LibraryItem] {
-        Array(
-            watchedItems
-                .filter { ($0.rating ?? 0) >= 4.0 }
-                .sorted(by: rankSort)
-                .prefix(10)
-        )
-    }
-
-    private var visibleItems: [LibraryItem] {
-        let byMode: [LibraryItem]
-        switch mode {
-        case .all:
-            byMode = allItems
-        case .watchlist:
-            byMode = watchlistItems
-        case .watched:
-            byMode = watchedItems
-        }
-
-        let themeFiltered = applyThemeFilter(byMode)
-        return sortItems(themeFiltered)
-    }
-
-    private var availableThemes: [String] {
-        let sourceItems: [LibraryItem]
-        switch mode {
-        case .all:
-            sourceItems = allItems
-        case .watchlist:
-            sourceItems = watchlistItems
-        case .watched:
-            sourceItems = watchedItems
-        }
-
-        let normalized = ThemeExtractor.shared.normalizeThemes(sourceItems.flatMap(\.themes))
-        return Array(Set(normalized)).sorted()
-    }
-
-    private func applyFilter(_ items: [LibraryItem]) -> [LibraryItem] {
-        switch filter {
-        case .all:
-            return items
-        case .movies:
-            return items.filter { $0.mediaType == .movie }
-        case .tv:
-            return items.filter { $0.mediaType == .tvShow }
-        case .books:
-            return items.filter { $0.mediaType == .book }
-        }
-    }
-
-    private func applyThemeFilter(_ items: [LibraryItem]) -> [LibraryItem] {
-        guard selectedTheme != "all" else { return items }
-        return items.filter { item in
-            ThemeExtractor.shared.normalizeThemes(item.themes).contains(selectedTheme)
-        }
-    }
-
-    private func sortItems(_ items: [LibraryItem]) -> [LibraryItem] {
-        switch sortOption {
-        case .recentlyAdded:
-            return items.sorted { $0.dateAdded > $1.dateAdded }
-        case .oldestAdded:
-            return items.sorted { $0.dateAdded < $1.dateAdded }
-        case .highestRated:
-            return items.sorted { ($0.rating ?? -1) > ($1.rating ?? -1) }
-        case .recentlyWatched:
-            return items.sorted {
-                ($0.watchedDate ?? .distantPast) > ($1.watchedDate ?? .distantPast)
-            }
-        case .titleAZ:
-            return items.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-        }
-    }
-
-    private func rankSort(_ lhs: LibraryItem, _ rhs: LibraryItem) -> Bool {
-        let leftRating = lhs.rating ?? -1
-        let rightRating = rhs.rating ?? -1
-        if leftRating != rightRating { return leftRating > rightRating }
-
-        let leftWatched = lhs.watchedDate ?? .distantPast
-        let rightWatched = rhs.watchedDate ?? .distantPast
-        if leftWatched != rightWatched { return leftWatched > rightWatched }
-
-        return lhs.dateAdded > rhs.dateAdded
+    private var filterSummary: String {
+        let status = filterState.status.label
+        let sort = filterState.sort.label
+        let group = filterState.groupByType ? "Grouped" : "Flat"
+        return "\(status) · \(sort) · \(group)"
     }
 
     @ViewBuilder
-    private func itemRow(_ item: LibraryItem) -> some View {
-        let destination: AnyView = {
-            switch item {
-            case .movie(let movie):
-                return AnyView(MovieDetailView(movie: movie))
-            case .tvShow(let show):
-                return AnyView(TVShowDetailView(show: show))
-            case .book(let book):
-                return AnyView(BookDetailView(book: book))
-            }
-        }()
-
-        HStack(spacing: 10) {
-            NavigationLink(destination: destination) {
-                rowContent(item)
+    private func entryCard(_ entry: LibraryEntry) -> some View {
+        switch entry {
+        case .movie(let movie):
+            NavigationLink(destination: MovieDetailView(movie: movie)) {
+                MediaLibraryCard(
+                    title: movie.title,
+                    subtitle: movie.year.map(String.init) ?? "Movie",
+                    posterURL: movie.posterURL,
+                    typeLabel: "Movie",
+                    typeColor: .blue,
+                    progressLabel: movie.watchedDate == nil ? "Planned" : "Completed",
+                    ratingLine: mediaRatingLine(publicRating: movie.rating, personalRating: nil),
+                    themesHint: movie.themes.isEmpty ? nil : movie.themes.prefix(3).map(displayTheme).joined(separator: " · ")
+                )
             }
             .buttonStyle(.plain)
-
-            if item.isWatched {
-                ratingMenu(for: item)
+            .contextMenu {
+                completionAction(for: entry)
+                deleteAction(for: entry)
             }
-        }
-        .contentShape(Rectangle())
-        .contextMenu {
-            if item.isWatched {
-                Menu("Set Rating") {
-                    ForEach(1...5, id: \.self) { star in
-                        Button("\(star) Star\(star == 1 ? "" : "s")") {
-                            setRating(item: item, rating: Double(star))
-                        }
-                    }
-                    Button("Clear Rating") {
-                        setRating(item: item, rating: nil)
-                    }
-                }
-                Button {
-                    markAsWatchlist(item: item)
-                } label: {
-                    Label("Move to Watchlist", systemImage: "bookmark")
-                }
-            } else {
-                Button {
-                    watchedDate = Date()
-                    watchedRating = 0
-                    markWatchedTarget = item
-                } label: {
-                    Label("Mark as Watched", systemImage: "checkmark.circle")
-                }
-            }
-            Button(role: .destructive) {
-                deleteItem(item: item)
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
-        }
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            if item.isWatched {
-                Button("Watchlist") {
-                    markAsWatchlist(item: item)
-                }
-                .tint(.orange)
-            } else {
-                Button("Watched") {
-                    watchedDate = Date()
-                    watchedRating = 0
-                    markWatchedTarget = item
-                }
-                .tint(.green)
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                completionSwipe(for: entry)
+                deleteSwipe(for: entry)
             }
 
-            Button("Delete", role: .destructive) {
-                deleteItem(item: item)
+        case .tvShow(let show):
+            NavigationLink(destination: TVShowDetailView(show: show)) {
+                MediaLibraryCard(
+                    title: show.title,
+                    subtitle: show.year.map(String.init) ?? "TV Show",
+                    posterURL: show.posterURL,
+                    typeLabel: "TV",
+                    typeColor: .green,
+                    progressLabel: show.watchedDate == nil ? "Planned" : "Completed",
+                    ratingLine: mediaRatingLine(publicRating: show.rating, personalRating: nil),
+                    themesHint: show.themes.isEmpty ? nil : show.themes.prefix(3).map(displayTheme).joined(separator: " · ")
+                )
             }
+            .buttonStyle(.plain)
+            .contextMenu {
+                completionAction(for: entry)
+                deleteAction(for: entry)
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                completionSwipe(for: entry)
+                deleteSwipe(for: entry)
+            }
+
+        case .book(let book):
+            NavigationLink(destination: BookDetailView(book: book)) {
+                MediaLibraryCard(
+                    title: book.title,
+                    subtitle: book.author ?? "Book",
+                    posterURL: book.coverURL,
+                    typeLabel: "Book",
+                    typeColor: .orange,
+                    progressLabel: book.watchedDate == nil ? "Planned" : "Completed",
+                    ratingLine: mediaRatingLine(publicRating: book.rating, personalRating: nil),
+                    themesHint: book.themes.isEmpty ? nil : book.themes.prefix(3).map(displayTheme).joined(separator: " · ")
+                )
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                completionAction(for: entry)
+                deleteAction(for: entry)
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                completionSwipe(for: entry)
+                deleteSwipe(for: entry)
+            }
+
+        case .podcastShow(let show):
+            NavigationLink(destination: PodcastLibraryShowDetailView(group: show)) {
+                MediaLibraryCard(
+                    title: show.name,
+                    subtitle: "\(show.episodes.count) added episode\(show.episodes.count == 1 ? "" : "s")",
+                    posterURL: show.artworkURL,
+                    typeLabel: "Podcast",
+                    typeColor: .purple,
+                    progressLabel: podcastProgressLabel(for: show),
+                    ratingLine: nil,
+                    themesHint: podcastThemeHint(for: show)
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func mediaRatingLine(publicRating: Double?, personalRating: Double?) -> String? {
+        let publicPart = publicRating.map { "Public ★\(String(format: "%.1f", $0))" }
+        let personalPart = personalRating.map { "Yours ★\(String(format: "%.1f", $0))" }
+        return [publicPart, personalPart].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    private func podcastProgressLabel(for show: PodcastLibraryShowGroup) -> String {
+        let completed = show.episodes.filter { $0.completedAt != nil }.count
+        if completed == show.episodes.count, completed > 0 { return "Completed" }
+        let inProgress = show.episodes.filter { $0.currentPositionSeconds > 0 && $0.completedAt == nil }.count
+        if inProgress > 0 { return "In Progress" }
+        return "Planned"
+    }
+
+    private func podcastThemeHint(for show: PodcastLibraryShowGroup) -> String {
+        let themes = show.episodes.flatMap { ThemeExtractor.shared.normalizeThemes($0.themes) }
+        if themes.isEmpty {
+            return "No themes yet — generate themes from episode notes"
+        }
+        let unique = Array(Set(themes)).sorted()
+        return unique.prefix(3).map(displayTheme).joined(separator: " · ")
+    }
+
+    private func displayTheme(_ value: String) -> String {
+        value.replacingOccurrences(of: "-", with: " ").capitalized
+    }
+
+    @ViewBuilder
+    private func completionAction(for entry: LibraryEntry) -> some View {
+        switch entry {
+        case .movie(let movie):
+            Button(movie.watchedDate == nil ? "Mark Complete" : "Mark Incomplete") {
+                movie.watchedDate = movie.watchedDate == nil ? Date() : nil
+                try? modelContext.save()
+            }
+        case .tvShow(let show):
+            Button(show.watchedDate == nil ? "Mark Complete" : "Mark Incomplete") {
+                show.watchedDate = show.watchedDate == nil ? Date() : nil
+                try? modelContext.save()
+            }
+        case .book(let book):
+            Button(book.watchedDate == nil ? "Mark Read" : "Mark Unread") {
+                book.watchedDate = book.watchedDate == nil ? Date() : nil
+                try? modelContext.save()
+            }
+        case .podcastShow:
+            EmptyView()
         }
     }
 
     @ViewBuilder
-    private func rowContent(_ item: LibraryItem) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text(item.title)
-                    .font(.headline)
-                    .lineLimit(1)
-                Text(item.mediaLabel)
-                    .font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(item.mediaColor.opacity(0.12))
-                    .foregroundStyle(item.mediaColor)
-                    .clipShape(Capsule())
-
-                Text(item.isWatched ? "Watched" : "Watchlist")
-                    .font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(item.isWatched ? Color.green.opacity(0.12) : Color.orange.opacity(0.12))
-                    .foregroundStyle(item.isWatched ? .green : .orange)
-                    .clipShape(Capsule())
+    private func completionSwipe(for entry: LibraryEntry) -> some View {
+        switch entry {
+        case .movie(let movie):
+            Button(movie.watchedDate == nil ? "Complete" : "Undo") {
+                movie.watchedDate = movie.watchedDate == nil ? Date() : nil
+                try? modelContext.save()
             }
-            HStack(spacing: 10) {
-                if let year = item.year {
-                    Text(String(year))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                if let rating = item.rating {
-                    Text("★ \(String(format: "%.1f", rating))")
-                        .font(.subheadline)
-                        .foregroundStyle(.yellow)
-                }
-                if let watchedDate = item.watchedDate {
-                    Text(watchedDate.formatted(date: .abbreviated, time: .omitted))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            .tint(movie.watchedDate == nil ? .green : .orange)
+        case .tvShow(let show):
+            Button(show.watchedDate == nil ? "Complete" : "Undo") {
+                show.watchedDate = show.watchedDate == nil ? Date() : nil
+                try? modelContext.save()
             }
-
-            if !item.themes.isEmpty {
-                Text(item.themes.prefix(3).map { $0.replacingOccurrences(of: "-", with: " ") }.joined(separator: " • "))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            .tint(show.watchedDate == nil ? .green : .orange)
+        case .book(let book):
+            Button(book.watchedDate == nil ? "Read" : "Unread") {
+                book.watchedDate = book.watchedDate == nil ? Date() : nil
+                try? modelContext.save()
             }
+            .tint(book.watchedDate == nil ? .green : .orange)
+        case .podcastShow:
+            EmptyView()
         }
     }
 
-    @ViewBuilder
-    private func ratingMenu(for item: LibraryItem) -> some View {
-        Menu {
-            ForEach(1...5, id: \.self) { star in
-                Button("\(star) Star\(star == 1 ? "" : "s")") {
-                    setRating(item: item, rating: Double(star))
-                }
-            }
-            Button("Clear Rating") {
-                setRating(item: item, rating: nil)
-            }
+    private func deleteAction(for entry: LibraryEntry) -> some View {
+        Button(role: .destructive) {
+            delete(entry)
         } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                Image(systemName: "star.circle.fill")
-                    .font(.title3)
-                    .foregroundStyle(.yellow)
-                Text(item.rating.map { String(format: "%.1f", $0) } ?? "Rate")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(minWidth: 42)
+            Label("Delete", systemImage: "trash")
         }
     }
 
-    private func metricCard(title: String, value: String, subtitle: String, tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.headline)
-                .foregroundStyle(.primary)
-            Text(subtitle)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+    private func deleteSwipe(for entry: LibraryEntry) -> some View {
+        Button(role: .destructive) {
+            delete(entry)
+        } label: {
+            Label("Delete", systemImage: "trash")
         }
-        .frame(width: 130, alignment: .leading)
-        .padding(10)
-        .background(tint.opacity(0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    private var topRatedValue: String {
-        guard let top = watchedItems.first(where: { $0.rating != nil }),
-              let rating = top.rating else { return "—" }
-        return String(format: "%.1f ★", rating)
-    }
-
-    private var topRatedSubtitle: String {
-        guard let top = watchedItems.first(where: { $0.rating != nil }) else { return "No ratings yet" }
-        return top.title
-    }
-
-    private func applyWatched(target: LibraryItem) {
-        switch target {
-        case .movie(let movie):
-            movie.watchedDate = watchedDate
-            movie.rating = watchedRating > 0 ? watchedRating : nil
-        case .tvShow(let show):
-            show.watchedDate = watchedDate
-            show.rating = watchedRating > 0 ? watchedRating : nil
-        case .book(let book):
-            book.watchedDate = watchedDate
-            book.rating = watchedRating > 0 ? watchedRating : nil
-        }
-        try? modelContext.save()
-    }
-
-    private func markAsWatchlist(item: LibraryItem) {
-        switch item {
-        case .movie(let movie):
-            movie.watchedDate = nil
-            movie.rating = nil
-        case .tvShow(let show):
-            show.watchedDate = nil
-            show.rating = nil
-        case .book(let book):
-            book.watchedDate = nil
-            book.rating = nil
-        }
-        try? modelContext.save()
-    }
-
-    private func setRating(item: LibraryItem, rating: Double?) {
-        switch item {
-        case .movie(let movie):
-            movie.rating = rating
-        case .tvShow(let show):
-            show.rating = rating
-        case .book(let book):
-            book.rating = rating
-        }
-        try? modelContext.save()
-    }
-
-    private func deleteItem(item: LibraryItem) {
-        switch item {
+    private func delete(_ entry: LibraryEntry) {
+        switch entry {
         case .movie(let movie):
             modelContext.delete(movie)
         case .tvShow(let show):
             modelContext.delete(show)
         case .book(let book):
             modelContext.delete(book)
+        case .podcastShow(let group):
+            for episode in group.episodes {
+                modelContext.delete(episode)
+            }
         }
         try? modelContext.save()
     }
+}
 
-    private func reconcileThemeFilter() {
-        if selectedTheme != "all", !availableThemes.contains(selectedTheme) {
-            selectedTheme = "all"
+private struct MediaLibraryCard: View {
+    let title: String
+    let subtitle: String
+    let posterURL: String?
+    let typeLabel: String
+    let typeColor: Color
+    let progressLabel: String
+    let ratingLine: String?
+    let themesHint: String?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ConstellationPosterView(
+                imageURL: posterURL,
+                symbol: "photo",
+                width: 62,
+                height: 92,
+                cornerRadius: 10,
+                contentMode: .fill
+            )
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(title)
+                        .font(ConstellationTypeScale.supporting.weight(.semibold))
+                        .lineLimit(2)
+                    Spacer(minLength: 0)
+                    Text(typeLabel)
+                        .font(ConstellationTypeScale.caption.weight(.semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(typeColor.opacity(0.16))
+                        .foregroundStyle(typeColor)
+                        .clipShape(Capsule())
+                }
+
+                Text(subtitle)
+                    .font(ConstellationTypeScale.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                HStack(spacing: 8) {
+                    Text(progressLabel)
+                        .font(ConstellationTypeScale.caption.weight(.semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(progressColor.opacity(0.14))
+                        .foregroundStyle(progressColor)
+                        .clipShape(Capsule())
+
+                    if let ratingLine, !ratingLine.isEmpty {
+                        Text(ratingLine)
+                            .font(ConstellationTypeScale.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                if let themesHint, !themesHint.isEmpty {
+                    Text(themesHint)
+                        .font(ConstellationTypeScale.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ConstellationPalette.surfaceStrong)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(ConstellationPalette.border.opacity(0.45), lineWidth: 0.7)
+        }
+    }
+
+    private var progressColor: Color {
+        switch progressLabel.lowercased() {
+        case "completed":
+            return .green
+        case "in progress":
+            return .blue
+        default:
+            return .orange
         }
     }
 }
 
-private enum LibraryMode: String, CaseIterable, Identifiable {
-    case all
-    case watchlist
-    case watched
+private struct LibraryFilterSheet: View {
+    @Binding var state: LibraryFilterState
+    @Environment(\.dismiss) private var dismiss
 
-    var id: String { rawValue }
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Type") {
+                    Picker("Type", selection: $state.type) {
+                        ForEach(LibraryFilterType.allCases) { type in
+                            Text(type.label).tag(type)
+                        }
+                    }
+                }
 
-    var sectionTitle: String {
-        switch self {
-        case .all: return "Library"
-        case .watchlist: return "Watchlist"
-        case .watched: return "Watched"
-        }
-    }
+                Section("Status") {
+                    Picker("Status", selection: $state.status) {
+                        ForEach(LibraryStatusFilter.allCases) { status in
+                            Text(status.label).tag(status)
+                        }
+                    }
+                }
 
-    var emptyTitle: String {
-        switch self {
-        case .all: return "No Library Items"
-        case .watchlist: return "No Watchlist Items"
-        case .watched: return "No Watched Items"
-        }
-    }
+                Section("Sort") {
+                    Picker("Sort", selection: $state.sort) {
+                        ForEach(LibrarySortOption.allCases) { sort in
+                            Text(sort.label).tag(sort)
+                        }
+                    }
+                }
 
-    var emptyDescription: String {
-        switch self {
-        case .all:
-            return "Add movies, TV shows, or books to start building your library."
-        case .watchlist:
-            return "Add media, then keep upcoming picks here."
-        case .watched:
-            return "Mark items as watched to build your ranked favorites."
-        }
-    }
-
-    var emptyIcon: String {
-        switch self {
-        case .all: return "books.vertical"
-        case .watchlist: return "bookmark"
-        case .watched: return "checkmark.circle"
+                Section("Layout") {
+                    Toggle("Group by Type", isOn: $state.groupByType)
+                }
+            }
+            .navigationTitle("Advanced Filters")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
         }
     }
 }
 
-private enum LibraryMediaFilter: String, CaseIterable, Identifiable {
+private enum LibrarySearchSuggestion: Identifiable {
+    case show(name: String)
+    case episode(title: String, showName: String)
+    case item(title: String, type: LibraryFilterType)
+
+    var id: String {
+        switch self {
+        case .show(let name): return "show-\(name.lowercased())"
+        case .episode(let title, let show): return "ep-\(show.lowercased())-\(title.lowercased())"
+        case .item(let title, let type): return "item-\(type.rawValue)-\(title.lowercased())"
+        }
+    }
+
+    var queryText: String {
+        switch self {
+        case .show(let name): return name
+        case .episode(let title, _): return title
+        case .item(let title, _): return title
+        }
+    }
+
+    var displayText: String {
+        switch self {
+        case .show(let name): return "\(name) (Show)"
+        case .episode(let title, let showName): return "\(title) · \(showName)"
+        case .item(let title, let type): return "\(title) (\(type.label))"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .show: return "mic.fill"
+        case .episode: return "waveform"
+        case .item(_, let type):
+            switch type {
+            case .movies: return "film"
+            case .tv: return "tv"
+            case .books: return "book"
+            case .podcasts: return "mic"
+            case .all: return "sparkles"
+            }
+        }
+    }
+}
+
+private struct LibraryFilterState {
+    var type: LibraryFilterType = .all
+    var status: LibraryStatusFilter = .all
+    var sort: LibrarySortOption = .recentlyAdded
+    var groupByType = true
+}
+
+private enum LibraryFilterType: String, CaseIterable, Identifiable {
     case all
     case movies
     case tv
     case books
+    case podcasts
+
     var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all: return "All"
+        case .movies: return "Movies"
+        case .tv: return "TV"
+        case .books: return "Books"
+        case .podcasts: return "Podcasts"
+        }
+    }
+}
+
+private enum LibraryStatusFilter: String, CaseIterable, Identifiable {
+    case all
+    case inProgress
+    case completed
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all: return "All"
+        case .inProgress: return "In Progress"
+        case .completed: return "Completed"
+        }
+    }
 }
 
 private enum LibrarySortOption: String, CaseIterable, Identifiable {
     case recentlyAdded
-    case oldestAdded
-    case highestRated
-    case recentlyWatched
+    case recentActivity
     case titleAZ
+    case highestRated
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .recentlyAdded: return "Recently Added"
-        case .oldestAdded: return "Oldest Added"
-        case .highestRated: return "Highest Rated"
-        case .recentlyWatched: return "Recently Watched"
+        case .recentActivity: return "Recent Activity"
         case .titleAZ: return "Title A–Z"
+        case .highestRated: return "Highest Rated"
         }
     }
 }
 
-private enum LibraryItem: Identifiable {
+private enum LibraryEntry: Identifiable {
     case movie(Movie)
     case tvShow(TVShow)
     case book(Book)
+    case podcastShow(PodcastLibraryShowGroup)
 
-    var id: UUID {
+    var id: String {
         switch self {
-        case .movie(let movie): return movie.id
-        case .tvShow(let show): return show.id
-        case .book(let book): return book.id
+        case .movie(let movie): return "movie-\(movie.id.uuidString)"
+        case .tvShow(let show): return "tv-\(show.id.uuidString)"
+        case .book(let book): return "book-\(book.id.uuidString)"
+        case .podcastShow(let show): return "podcast-show-\(show.name.lowercased())"
         }
     }
 
@@ -643,58 +771,25 @@ private enum LibraryItem: Identifiable {
         case .movie(let movie): return movie.title
         case .tvShow(let show): return show.title
         case .book(let book): return book.title
+        case .podcastShow(let show): return show.name
         }
     }
 
-    var mediaType: MediaType {
+    var filterType: LibraryFilterType {
         switch self {
-        case .movie: return .movie
-        case .tvShow: return .tvShow
-        case .book: return .book
+        case .movie: return .movies
+        case .tvShow: return .tv
+        case .book: return .books
+        case .podcastShow: return .podcasts
         }
     }
 
-    var mediaLabel: String {
+    var groupLabel: String {
         switch self {
-        case .movie: return "Movie"
-        case .tvShow: return "TV"
-        case .book: return "Book"
-        }
-    }
-
-    var mediaColor: Color {
-        switch self {
-        case .movie: return .blue
-        case .tvShow: return .green
-        case .book: return .orange
-        }
-    }
-
-    var isWatched: Bool {
-        watchedDate != nil
-    }
-
-    var year: Int? {
-        switch self {
-        case .movie(let movie): return movie.year
-        case .tvShow(let show): return show.year
-        case .book(let book): return book.year
-        }
-    }
-
-    var rating: Double? {
-        switch self {
-        case .movie(let movie): return movie.rating
-        case .tvShow(let show): return show.rating
-        case .book(let book): return book.rating
-        }
-    }
-
-    var watchedDate: Date? {
-        switch self {
-        case .movie(let movie): return movie.watchedDate
-        case .tvShow(let show): return show.watchedDate
-        case .book(let book): return book.watchedDate
+        case .movie: return "Movies"
+        case .tvShow: return "TV Shows"
+        case .book: return "Books"
+        case .podcastShow: return "Podcasts"
         }
     }
 
@@ -703,14 +798,63 @@ private enum LibraryItem: Identifiable {
         case .movie(let movie): return movie.dateAdded
         case .tvShow(let show): return show.dateAdded
         case .book(let book): return book.dateAdded
+        case .podcastShow(let show): return show.episodes.map(\.dateAdded).max() ?? .distantPast
         }
     }
 
-    var themes: [String] {
+    var activityDate: Date {
         switch self {
-        case .movie(let movie): return movie.themes
-        case .tvShow(let show): return show.themes
-        case .book(let book): return book.themes
+        case .movie(let movie): return movie.watchedDate ?? movie.dateAdded
+        case .tvShow(let show): return show.watchedDate ?? show.dateAdded
+        case .book(let book): return book.watchedDate ?? book.dateAdded
+        case .podcastShow(let show):
+            let episodeDates = show.episodes.map { $0.completedAt ?? $0.dateAdded }
+            return episodeDates.max() ?? .distantPast
+        }
+    }
+
+    var publicRating: Double? {
+        switch self {
+        case .movie(let movie): return movie.rating
+        case .tvShow(let show): return show.rating
+        case .book(let book): return book.rating
+        case .podcastShow: return nil
+        }
+    }
+
+    var isCompleted: Bool {
+        switch self {
+        case .movie(let movie): return movie.watchedDate != nil
+        case .tvShow(let show): return show.watchedDate != nil
+        case .book(let book): return book.watchedDate != nil
+        case .podcastShow(let show):
+            return !show.episodes.isEmpty && show.episodes.allSatisfy { $0.completedAt != nil }
+        }
+    }
+
+    var isInProgress: Bool {
+        switch self {
+        case .movie(let movie): return movie.watchedDate == nil
+        case .tvShow(let show): return show.watchedDate == nil
+        case .book(let book): return book.watchedDate == nil
+        case .podcastShow(let show):
+            let hasStarted = show.episodes.contains { $0.currentPositionSeconds > 0 }
+            let hasIncomplete = show.episodes.contains { $0.completedAt == nil }
+            return hasStarted && hasIncomplete
+        }
+    }
+
+    var searchIndex: [String] {
+        switch self {
+        case .movie(let movie):
+            return [movie.title, movie.director ?? "", movie.year.map(String.init) ?? ""].map { $0.lowercased() }
+        case .tvShow(let show):
+            return [show.title, show.creator ?? "", show.year.map(String.init) ?? ""].map { $0.lowercased() }
+        case .book(let book):
+            return [book.title, book.author ?? "", book.year.map(String.init) ?? ""].map { $0.lowercased() }
+        case .podcastShow(let show):
+            let titles = show.episodes.map(\.title)
+            return ([show.name] + titles).map { $0.lowercased() }
         }
     }
 }
@@ -719,6 +863,7 @@ private enum AddMediaSheet: String, Identifiable {
     case movie
     case tvShow
     case book
+    case podcast
 
     var id: String { rawValue }
 }

@@ -12,10 +12,12 @@ struct ThemeDetailView: View {
     @Query private var allMovies: [Movie]
     @Query private var allTVShows: [TVShow]
     @Query private var allBooks: [Book]
+    @Query private var allPodcasts: [PodcastEpisode]
     @Query private var allCollections: [ItemCollection]
 
     @State private var themeExplanation: ThemeExplanation?
     @State private var isLoadingExplanation = false
+    @State private var isDeepDiveExpanded = false
 
     let themeName: String
 
@@ -33,7 +35,8 @@ struct ThemeDetailView: View {
         let movieTitles = moviesWithTheme.map(\.title)
         let showTitles = showsWithTheme.map(\.title)
         let bookTitles = booksWithTheme.map(\.title)
-        return Array((movieTitles + showTitles + bookTitles).prefix(8))
+        let podcastTitles = podcastsWithTheme.map(\.title)
+        return Array((movieTitles + showTitles + bookTitles + podcastTitles).prefix(8))
     }
     
     var moviesWithTheme: [Movie] {
@@ -49,7 +52,7 @@ struct ThemeDetailView: View {
     }
     
     var totalCount: Int {
-        moviesWithTheme.count + showsWithTheme.count + booksWithTheme.count
+        moviesWithTheme.count + showsWithTheme.count + booksWithTheme.count + podcastsWithTheme.count
     }
 
     var booksWithTheme: [Book] {
@@ -58,14 +61,22 @@ struct ThemeDetailView: View {
         }
     }
 
+    var podcastsWithTheme: [PodcastEpisode] {
+        allPodcasts.filter { episode in
+            ThemeExtractor.shared.normalizeThemes(episode.themes).contains(normalizedThemeName)
+        }
+    }
+
     var collectionsWithTheme: [ItemCollection] {
         let movieIDs = Set(moviesWithTheme.map { $0.id.uuidString })
         let showIDs = Set(showsWithTheme.map { $0.id.uuidString })
         let bookIDs = Set(booksWithTheme.map { $0.id.uuidString })
+        let podcastIDs = Set(podcastsWithTheme.map { $0.id.uuidString })
         return allCollections.filter { collection in
             !Set(collection.movieIDs).isDisjoint(with: movieIDs)
             || !Set(collection.showIDs).isDisjoint(with: showIDs)
             || !Set(collection.bookIDs).isDisjoint(with: bookIDs)
+            || !Set(collection.podcastIDs).isDisjoint(with: podcastIDs)
         }
     }
     
@@ -84,21 +95,23 @@ struct ThemeDetailView: View {
                 .padding(.horizontal)
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Theme Deep Dive")
-                        .font(.headline)
-
-                    if isLoadingExplanation && themeExplanation == nil {
-                        ProgressView("Building insight...")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    } else if let explanation = themeExplanation {
-                        Text(composeDeepSummary(from: explanation))
-                            .font(.subheadline)
-                            .foregroundStyle(.primary)
-                    } else {
-                        Text(ThemeDefinitionService.shared.definition(for: normalizedThemeName))
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                    DisclosureGroup(isExpanded: $isDeepDiveExpanded) {
+                        if isLoadingExplanation && themeExplanation == nil {
+                            ProgressView("Building insight...")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        } else if let explanation = themeExplanation {
+                            Text(composeDeepSummary(from: explanation))
+                                .font(.subheadline)
+                                .foregroundStyle(.primary)
+                        } else {
+                            Text(ThemeDefinitionService.shared.definition(for: normalizedThemeName))
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    } label: {
+                        Text("Theme Deep Dive")
+                            .font(.headline)
                     }
                 }
                 .padding()
@@ -152,6 +165,44 @@ struct ThemeDetailView: View {
                             ForEach(booksWithTheme) { book in
                                 NavigationLink(destination: BookDetailView(book: book)) {
                                     ThemeBookCard(book: book)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    if !podcastsWithTheme.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Podcasts")
+                                .font(.headline)
+                                .padding(.horizontal)
+
+                            ForEach(podcastsWithTheme) { episode in
+                                NavigationLink(destination: PodcastEpisodeDetailView(episode: episode)) {
+                                    HStack(spacing: 12) {
+                                        if let artwork = episode.thumbnailURL, let url = URL(string: artwork) {
+                                            AsyncImage(url: url) { image in
+                                                image.resizable().aspectRatio(contentMode: .fill)
+                                            } placeholder: {
+                                                Rectangle().fill(Color.gray.opacity(0.3))
+                                            }
+                                            .frame(width: 64, height: 64)
+                                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                                        }
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(episode.title)
+                                                .font(.headline)
+                                                .lineLimit(2)
+                                            Text(episode.showName)
+                                                .font(.subheadline)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                    }
+                                    .padding()
+                                    .background(Color(.systemGray6))
+                                    .cornerRadius(12)
+                                    .padding(.horizontal)
                                 }
                                 .buttonStyle(.plain)
                             }

@@ -14,6 +14,7 @@ struct CollectionsView: View {
     @Query private var movies: [Movie]
     @Query private var tvShows: [TVShow]
     @Query private var books: [Book]
+    @Query private var podcasts: [PodcastEpisode]
     
     @State private var showingCreateCollection = false
     @State private var autoGenerationSummary = ""
@@ -26,7 +27,7 @@ struct CollectionsView: View {
                     ContentUnavailableView {
                         Label("No Collections Yet", systemImage: "square.stack.3d.up")
                     } description: {
-                        Text("Create a collection to organize movies and TV shows by theme, mood, or topic.")
+                        Text("Create a collection to organize movies, TV shows, books, and podcasts by theme, mood, or topic.")
                     } actions: {
                         Button("Create First Collection") {
                             showingCreateCollection = true
@@ -77,6 +78,7 @@ struct CollectionsView: View {
             movies: movies,
             tvShows: tvShows,
             books: books,
+            podcasts: podcasts,
             existingCollections: collections,
             modelContext: modelContext
         )

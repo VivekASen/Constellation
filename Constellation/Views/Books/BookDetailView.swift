@@ -2,89 +2,159 @@ import SwiftUI
 import SwiftData
 
 struct BookDetailView: View {
-    @Environment(\.modelContext) private var modelContext
     @Bindable var book: Book
 
-    @State private var ratingValue: Double = 0
+    @Query private var allMovies: [Movie]
+    @Query private var allTVShows: [TVShow]
+    @Query private var allBooks: [Book]
+    @Query private var allPodcasts: [PodcastEpisode]
+
+    @State private var showConnectionsSheet = false
+
+    private var normalizedThemes: [String] {
+        ThemeExtractor.shared.normalizeThemes(book.themes)
+    }
+
+    private var connectionItems: [MediaConnectionItem] {
+        guard !normalizedThemes.isEmpty else { return [] }
+
+        var items: [MediaConnectionItem] = []
+
+        for movie in allMovies {
+            let shared = sharedThemes(with: movie.themes)
+            guard !shared.isEmpty else { continue }
+            items.append(
+                MediaConnectionItem(
+                    id: "movie-\(movie.id.uuidString)",
+                    title: movie.title,
+                    subtitle: movie.year.map(String.init) ?? "",
+                    typeLabel: "Movie",
+                    sharedThemes: shared
+                )
+            )
+        }
+
+        for show in allTVShows {
+            let shared = sharedThemes(with: show.themes)
+            guard !shared.isEmpty else { continue }
+            items.append(
+                MediaConnectionItem(
+                    id: "tv-\(show.id.uuidString)",
+                    title: show.title,
+                    subtitle: show.creator ?? "",
+                    typeLabel: "TV",
+                    sharedThemes: shared
+                )
+            )
+        }
+
+        for other in allBooks where other.id != book.id {
+            let shared = sharedThemes(with: other.themes)
+            guard !shared.isEmpty else { continue }
+            items.append(
+                MediaConnectionItem(
+                    id: "book-\(other.id.uuidString)",
+                    title: other.title,
+                    subtitle: other.author ?? "",
+                    typeLabel: "Book",
+                    sharedThemes: shared
+                )
+            )
+        }
+
+        for episode in allPodcasts {
+            let shared = sharedThemes(with: episode.themes)
+            guard !shared.isEmpty else { continue }
+            items.append(
+                MediaConnectionItem(
+                    id: "podcast-\(episode.id.uuidString)",
+                    title: episode.title,
+                    subtitle: episode.showName,
+                    typeLabel: "Podcast",
+                    sharedThemes: shared
+                )
+            )
+        }
+
+        return items.sorted { lhs, rhs in
+            if lhs.sharedThemes.count == rhs.sharedThemes.count {
+                return lhs.title < rhs.title
+            }
+            return lhs.sharedThemes.count > rhs.sharedThemes.count
+        }
+    }
+
+    private var headerMetrics: [ConstellationHeroMetric] {
+        let ratingValue = book.rating.map { String(format: "%.1f", $0) } ?? "-"
+        let pagesValue = book.pageCount.map(String.init) ?? "-"
+        return [
+            ConstellationHeroMetric(value: ratingValue, label: "Rating", icon: "star.fill"),
+            ConstellationHeroMetric(value: pagesValue, label: "Pages", icon: "book.pages"),
+            ConstellationHeroMetric(value: "\(connectionItems.count)", label: "Connections", icon: "sparkles", key: "connections")
+        ]
+    }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                AsyncImage(url: URL(string: book.coverURL ?? "")) { image in
-                    image.resizable().aspectRatio(contentMode: .fit)
-                } placeholder: {
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.2))
-                        .aspectRatio(2/3, contentMode: .fit)
-                        .overlay { Image(systemName: "book.closed") }
-                }
-                .frame(height: 300)
-                .frame(maxWidth: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-
-                Text(book.title)
-                    .font(.title2.bold())
-
-                if let author = book.author {
-                    Text(author)
-                        .foregroundStyle(.secondary)
-                }
-
-                HStack(spacing: 12) {
-                    if let year = book.year {
-                        Text(String(year)).font(.caption).foregroundStyle(.secondary)
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 0) {
+                ConstellationStarHeroHeader(
+                    posterURL: book.coverURL,
+                    symbol: "book.closed",
+                    title: book.title,
+                    subtitle: book.author,
+                    metrics: headerMetrics,
+                    onMetricTap: { metric in
+                        guard metric.key == "connections", !connectionItems.isEmpty else { return }
+                        showConnectionsSheet = true
                     }
-                    if let pages = book.pageCount {
-                        Text("\(pages) pages").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
+                )
 
-                if let overview = book.overview, !overview.isEmpty {
-                    Text(overview)
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                }
-
-                if !book.themes.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Themes").font(.headline)
-                        Text(book.themes.map { $0.replacingOccurrences(of: "-", with: " ").capitalized }.joined(separator: " • "))
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if let notes = book.notes, !notes.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Notes").font(.headline)
-                        Text(notes).font(.body)
-                    }
-                }
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Rating").font(.headline)
-                    HStack(spacing: 8) {
-                        ForEach(1...5, id: \.self) { star in
-                            Image(systemName: star <= Int(ratingValue) ? "star.fill" : "star")
-                                .foregroundStyle(.yellow)
-                                .onTapGesture {
-                                    ratingValue = Double(star)
-                                    book.rating = ratingValue
-                                    try? modelContext.save()
-                                }
+                VStack(alignment: .leading, spacing: 20) {
+                    if let overview = book.overview, !overview.isEmpty {
+                        ConstellationDetailSection("Description") {
+                            Text(overview)
+                                .font(ConstellationTypeScale.body)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    .font(.title3)
+
+                    if !book.genres.isEmpty {
+                        ConstellationDetailSection("Genre") {
+                            Text(book.genres.first ?? "")
+                                .font(ConstellationTypeScale.supporting)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if !book.themes.isEmpty {
+                        ConstellationDetailSection("Themes") {
+                            FlowLayout(spacing: 8) {
+                                ForEach(book.themes, id: \.self) { theme in
+                                    NavigationLink(destination: ThemeDetailView(themeName: theme)) {
+                                        ConstellationTagPill(
+                                            text: theme.replacingOccurrences(of: "-", with: " ").capitalized
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
                 }
+                .padding(.horizontal, 18)
+                .padding(.top, 18)
+                .padding(.bottom, 34)
             }
-            .padding()
         }
-        .navigationTitle("Book")
+        .ignoresSafeArea(edges: .top)
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            ratingValue = book.rating ?? 0
+        .sheet(isPresented: $showConnectionsSheet) {
+            MediaConnectionsView(title: "Connections", items: connectionItems)
         }
+    }
+
+    private func sharedThemes(with themes: [String]) -> [String] {
+        let normalizedOther = Set(ThemeExtractor.shared.normalizeThemes(themes))
+        return normalizedThemes.filter { normalizedOther.contains($0) }
     }
 }

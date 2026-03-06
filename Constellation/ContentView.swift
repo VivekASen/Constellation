@@ -9,6 +9,8 @@ import SwiftUI
 import SwiftData
 
 struct ContentView: View {
+    @StateObject private var podcastPlayerStore = PodcastPlayerStore()
+
     var body: some View {
         TabView {
             HomeView()
@@ -31,6 +33,7 @@ struct ContentView: View {
                 }
         }
         .tint(ConstellationPalette.accent)
+        .environmentObject(podcastPlayerStore)
     }
 }
 
@@ -38,6 +41,7 @@ private enum AddMediaSheet: String, Identifiable {
     case movie
     case tvShow
     case book
+    case podcast
     
     var id: String { rawValue }
 }
@@ -46,6 +50,7 @@ struct HomeView: View {
     @Query(sort: \Movie.dateAdded, order: .reverse) private var movies: [Movie]
     @Query(sort: \TVShow.dateAdded, order: .reverse) private var tvShows: [TVShow]
     @Query(sort: \Book.dateAdded, order: .reverse) private var books: [Book]
+    @Query(sort: \PodcastEpisode.dateAdded, order: .reverse) private var podcasts: [PodcastEpisode]
     @Query private var collections: [ItemCollection]
 
     
@@ -57,11 +62,12 @@ struct HomeView: View {
         let movieThemes = movies.flatMap { ThemeExtractor.shared.normalizeThemes($0.themes) }
         let tvThemes = tvShows.flatMap { ThemeExtractor.shared.normalizeThemes($0.themes) }
         let bookThemes = books.flatMap { ThemeExtractor.shared.normalizeThemes($0.themes) }
-        return Array(Set(movieThemes + tvThemes + bookThemes)).sorted()
+        let podcastThemes = podcasts.flatMap { ThemeExtractor.shared.normalizeThemes($0.themes) }
+        return Array(Set(movieThemes + tvThemes + bookThemes + podcastThemes)).sorted()
     }
     
     var totalItems: Int {
-        movies.count + tvShows.count + books.count
+        movies.count + tvShows.count + books.count + podcasts.count
     }
     
     var body: some View {
@@ -173,8 +179,28 @@ struct HomeView: View {
                             }
                         }
                     }
+
+                    if !podcasts.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Recent Podcast Episodes")
+                                .font(.headline)
+                                .padding(.horizontal)
+
+                            ForEach(podcasts.prefix(5)) { episode in
+                                NavigationLink(destination: PodcastEpisodeDetailView(episode: episode)) {
+                                    PodcastEpisodeProgressRow(episode: episode)
+                                        .padding(.horizontal)
+                                        .padding(.vertical, 8)
+                                        .background(Color(.systemGray6))
+                                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                                        .padding(.horizontal)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
                     
-                    if movies.isEmpty && tvShows.isEmpty && books.isEmpty {
+                    if movies.isEmpty && tvShows.isEmpty && books.isEmpty && podcasts.isEmpty {
                         VStack(spacing: 16) {
                             Text("🌟")
                                 .font(.system(size: 60))
@@ -218,6 +244,16 @@ struct HomeView: View {
                                     .cornerRadius(12)
                             }
                             .padding(.horizontal)
+
+                            Button(action: { activeSheet = .podcast }) {
+                                Label("Add Podcast", systemImage: "mic.fill")
+                                    .padding()
+                                    .frame(maxWidth: .infinity)
+                                    .background(Color.purple)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
+                            }
+                            .padding(.horizontal)
                         }
                         .padding(.vertical, 60)
                     }
@@ -244,6 +280,12 @@ struct HomeView: View {
                         } label: {
                             Label("Add Book", systemImage: "book.closed.fill")
                         }
+
+                        Button {
+                            activeSheet = .podcast
+                        } label: {
+                            Label("Add Podcast", systemImage: "mic.fill")
+                        }
                     } label: {
                         Label("Add", systemImage: "plus")
                     }
@@ -257,6 +299,8 @@ struct HomeView: View {
                     TVShowSearchView()
                 case .book:
                     BookSearchView()
+                case .podcast:
+                    PodcastSearchView()
                 }
             }
             .task(id: movies.map(\.id).description + tvShows.map(\.id).description) {

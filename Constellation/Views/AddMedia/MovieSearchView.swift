@@ -465,13 +465,7 @@ struct MovieDetailSheet: View {
         )
         
         modelContext.insert(newMovie)
-        
-        // Extract themes in background
-        Task {
-            let themes = await ThemeExtractor.shared.extractThemes(from: newMovie)
-            newMovie.themes = themes
-            try? modelContext.save()
-        }
+        try? modelContext.save()
         
         dismiss()
     }

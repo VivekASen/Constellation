@@ -1,97 +1,124 @@
-//
-//  MovieDetailView.swift
-//  Constellation
-//
-//  Created by Vivek  Sen on 2/27/26.
-//
-
-
 import SwiftUI
+import SwiftData
 
 struct MovieDetailView: View {
     let movie: Movie
     @Environment(\.openURL) private var openURL
 
+    @Query private var allMovies: [Movie]
+    @Query private var allTVShows: [TVShow]
+    @Query private var allBooks: [Book]
+    @Query private var allPodcasts: [PodcastEpisode]
+
     @State private var trailer: TMDBVideo?
     @State private var watchProviders: [TMDBWatchProvider] = []
     @State private var similarMovies: [TMDBMovie] = []
     @State private var isLoadingExtras = false
-    
+    @State private var showConnectionsSheet = false
+
+    private var normalizedThemes: [String] {
+        ThemeExtractor.shared.normalizeThemes(movie.themes)
+    }
+
+    private var connectionItems: [MediaConnectionItem] {
+        guard !normalizedThemes.isEmpty else { return [] }
+
+        var items: [MediaConnectionItem] = []
+
+        for other in allMovies where other.id != movie.id {
+            let shared = sharedThemes(with: other.themes)
+            guard !shared.isEmpty else { continue }
+            items.append(
+                MediaConnectionItem(
+                    id: "movie-\(other.id.uuidString)",
+                    title: other.title,
+                    subtitle: other.year.map(String.init) ?? "",
+                    typeLabel: "Movie",
+                    sharedThemes: shared
+                )
+            )
+        }
+
+        for show in allTVShows {
+            let shared = sharedThemes(with: show.themes)
+            guard !shared.isEmpty else { continue }
+            items.append(
+                MediaConnectionItem(
+                    id: "tv-\(show.id.uuidString)",
+                    title: show.title,
+                    subtitle: show.creator ?? "",
+                    typeLabel: "TV",
+                    sharedThemes: shared
+                )
+            )
+        }
+
+        for book in allBooks {
+            let shared = sharedThemes(with: book.themes)
+            guard !shared.isEmpty else { continue }
+            items.append(
+                MediaConnectionItem(
+                    id: "book-\(book.id.uuidString)",
+                    title: book.title,
+                    subtitle: book.author ?? "",
+                    typeLabel: "Book",
+                    sharedThemes: shared
+                )
+            )
+        }
+
+        for episode in allPodcasts {
+            let shared = sharedThemes(with: episode.themes)
+            guard !shared.isEmpty else { continue }
+            items.append(
+                MediaConnectionItem(
+                    id: "podcast-\(episode.id.uuidString)",
+                    title: episode.title,
+                    subtitle: episode.showName,
+                    typeLabel: "Podcast",
+                    sharedThemes: shared
+                )
+            )
+        }
+
+        return items.sorted { lhs, rhs in
+            if lhs.sharedThemes.count == rhs.sharedThemes.count {
+                return lhs.title < rhs.title
+            }
+            return lhs.sharedThemes.count > rhs.sharedThemes.count
+        }
+    }
+
+    private var headerMetrics: [ConstellationHeroMetric] {
+        let ratingValue = movie.rating.map { String(format: "%.1f", $0) } ?? "-"
+        let yearValue = movie.year.map(String.init) ?? "-"
+        return [
+            ConstellationHeroMetric(value: ratingValue, label: "Rating", icon: "star.fill"),
+            ConstellationHeroMetric(value: yearValue, label: "Release", icon: "calendar"),
+            ConstellationHeroMetric(value: "\(connectionItems.count)", label: "Connections", icon: "sparkles", key: "connections")
+        ]
+    }
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Poster
-                if let posterURL = movie.posterURL, let url = URL(string: posterURL) {
-                    AsyncImage(url: url) { image in
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                    } placeholder: {
-                        ProgressView()
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 0) {
+                ConstellationStarHeroHeader(
+                    posterURL: movie.posterURL,
+                    symbol: "film",
+                    title: movie.title,
+                    subtitle: movie.director,
+                    metrics: headerMetrics,
+                    onMetricTap: { metric in
+                        guard metric.key == "connections", !connectionItems.isEmpty else { return }
+                        showConnectionsSheet = true
                     }
-                    .frame(height: 400)
-                    .frame(maxWidth: .infinity)
-                    .cornerRadius(12)
-                }
-                
-                VStack(alignment: .leading, spacing: 16) {
-                    // Title & Year
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(movie.title)
-                            .font(.title)
-                            .fontWeight(.bold)
-                        
-                        HStack {
-                            if let year = movie.year {
-                                Text(String(year))
-                                    .foregroundStyle(.secondary)
-                            }
-                            
-                            if let director = movie.director {
-                                Text("•")
-                                    .foregroundStyle(.secondary)
-                                Text(director)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .font(.subheadline)
-                    }
-                    
-                    // Rating
-                    if let rating = movie.rating {
-                        HStack(spacing: 8) {
-                            ForEach(1...5, id: \.self) { star in
-                                Image(systemName: star <= Int(rating) ? "star.fill" : "star")
-                                    .foregroundStyle(.yellow)
-                            }
-                        }
-                        .font(.title3)
-                    }
-                    
-                    // Genres
-                    if !movie.genres.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack {
-                                ForEach(movie.genres, id: \.self) { genre in
-                                    Text(genre)
-                                        .font(.caption)
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 6)
-                                        .background(Color.blue.opacity(0.2))
-                                        .foregroundStyle(.blue)
-                                        .cornerRadius(20)
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Overview
-                    if let overview = movie.overview {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Overview")
-                                .font(.headline)
-                            
+                )
+
+                VStack(alignment: .leading, spacing: 20) {
+                    if let overview = movie.overview, !overview.isEmpty {
+                        ConstellationDetailSection("Description") {
                             Text(overview)
+                                .font(ConstellationTypeScale.body)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -102,47 +129,43 @@ struct MovieDetailView: View {
                     }
 
                     if let trailer, let url = trailer.youtubeURL {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Trailer")
-                                .font(.headline)
-                            Button {
-                                openURL(url)
-                            } label: {
-                                Label(trailer.name, systemImage: "play.rectangle.fill")
-                                    .font(.subheadline.weight(.semibold))
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 8)
-                                    .background(Color.red.opacity(0.14))
-                                    .foregroundStyle(.red)
-                                    .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
+                        Button {
+                            openURL(url)
+                        } label: {
+                            Label("Watch Trailer", systemImage: "play.fill")
+                                .font(ConstellationTypeScale.supporting.weight(.semibold))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                                .background(ConstellationPalette.accent)
+                                .foregroundStyle(.white)
+                                .clipShape(Capsule())
                         }
+                        .buttonStyle(.plain)
                     }
 
                     if !watchProviders.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Where to Watch (US)")
-                                .font(.headline)
+                        ConstellationDetailSection("Where to Watch") {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 8) {
-                                    ForEach(watchProviders.prefix(10)) { provider in
+                                    ForEach(watchProviders.prefix(12)) { provider in
                                         HStack(spacing: 6) {
                                             if let logo = provider.logoURL {
                                                 AsyncImage(url: logo) { image in
                                                     image.resizable().scaledToFit()
                                                 } placeholder: {
-                                                    Color.gray.opacity(0.2)
+                                                    Color.white.opacity(0.35)
                                                 }
-                                                .frame(width: 18, height: 18)
+                                                .frame(width: 16, height: 16)
                                                 .clipShape(RoundedRectangle(cornerRadius: 4))
                                             }
                                             Text(provider.providerName)
-                                                .font(.caption)
+                                                .font(ConstellationTypeScale.caption)
+                                                .lineLimit(1)
                                         }
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 6)
-                                        .background(Color.blue.opacity(0.12))
+                                        .background(Color.green.opacity(0.2))
+                                        .foregroundStyle(Color.green.opacity(0.9))
                                         .clipShape(Capsule())
                                     }
                                 }
@@ -150,78 +173,76 @@ struct MovieDetailView: View {
                         }
                     }
 
-                    if !similarMovies.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Similar Picks")
-                                .font(.headline)
+                    if !movie.genres.isEmpty {
+                        ConstellationDetailSection("Genres") {
                             ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 10) {
+                                HStack(spacing: 8) {
+                                    ForEach(movie.genres, id: \.self) { genre in
+                                        ConstellationTagPill(text: genre)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if !movie.themes.isEmpty {
+                        ConstellationDetailSection("Themes") {
+                            FlowLayout(spacing: 8) {
+                                ForEach(movie.themes, id: \.self) { theme in
+                                    NavigationLink(destination: ThemeDetailView(themeName: theme)) {
+                                        ConstellationTagPill(
+                                            text: theme.replacingOccurrences(of: "-", with: " ").capitalized
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+
+                    if !similarMovies.isEmpty {
+                        ConstellationDetailSection("Similar Picks") {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 12) {
                                     ForEach(similarMovies.prefix(8)) { similar in
-                                        VStack(alignment: .leading, spacing: 4) {
+                                        VStack(alignment: .leading, spacing: 6) {
                                             AsyncImage(url: similar.posterURL) { image in
                                                 image.resizable().aspectRatio(contentMode: .fill)
                                             } placeholder: {
-                                                Rectangle().fill(Color.gray.opacity(0.25))
+                                                Rectangle().fill(Color.gray.opacity(0.2))
                                             }
                                             .frame(width: 110, height: 165)
-                                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
                                             Text(similar.title)
-                                                .font(.caption.weight(.semibold))
+                                                .font(ConstellationTypeScale.caption.weight(.semibold))
                                                 .lineLimit(2)
                                                 .frame(width: 110, alignment: .leading)
-                                            if let year = similar.year {
-                                                Text(String(year))
-                                                    .font(.caption2)
-                                                    .foregroundStyle(.secondary)
-                                            }
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                    
-                    // Themes
-                    if !movie.themes.isEmpty {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Themes")
-                                .font(.headline)
-                            
-                            FlowLayout(spacing: 8) {
-                                ForEach(movie.themes, id: \.self) { theme in
-                                    NavigationLink(destination: ThemeDetailView(themeName: theme)) {
-                                        Text(theme)
-                                            .font(.subheadline)
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 8)
-                                            .background(Color.purple.opacity(0.2))
-                                            .foregroundStyle(.purple)
-                                            .cornerRadius(20)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Notes
-                    if let notes = movie.notes {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("My Notes")
-                                .font(.headline)
-                            
-                            Text(notes)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
                 }
-                .padding(.horizontal)
+                .padding(.horizontal, 18)
+                .padding(.top, 18)
+                .padding(.bottom, 34)
             }
-            .padding(.vertical)
         }
+        .ignoresSafeArea(edges: .top)
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showConnectionsSheet) {
+            MediaConnectionsView(title: "Connections", items: connectionItems)
+        }
         .task(id: movie.id) {
             await loadEnhancements()
         }
+    }
+
+    private func sharedThemes(with themes: [String]) -> [String] {
+        let normalizedOther = Set(ThemeExtractor.shared.normalizeThemes(themes))
+        return normalizedThemes.filter { normalizedOther.contains($0) }
     }
 
     private func loadEnhancements() async {
@@ -262,51 +283,46 @@ struct MovieDetailView: View {
     }
 }
 
-// Simple flow layout for tags
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
-    
+
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let result = FlowResult(in: proposal.replacingUnspecifiedDimensions().width, subviews: subviews, spacing: spacing)
         return result.size
     }
-    
+
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let result = FlowResult(in: bounds.width, subviews: subviews, spacing: spacing)
         for (index, subview) in subviews.enumerated() {
             subview.place(at: CGPoint(x: bounds.minX + result.positions[index].x, y: bounds.minY + result.positions[index].y), proposal: .unspecified)
         }
     }
-    
-    struct FlowResult {
+
+    private struct FlowResult {
         var size: CGSize
         var positions: [CGPoint]
-        
+
         init(in maxWidth: CGFloat, subviews: Subviews, spacing: CGFloat) {
             var positions: [CGPoint] = []
-            var size: CGSize = .zero
-            var currentX: CGFloat = 0
-            var currentY: CGFloat = 0
-            var lineHeight: CGFloat = 0
-            
+            var x: CGFloat = 0
+            var y: CGFloat = 0
+            var rowHeight: CGFloat = 0
+
             for subview in subviews {
-                let subviewSize = subview.sizeThatFits(.unspecified)
-                
-                if currentX + subviewSize.width > maxWidth && currentX > 0 {
-                    currentX = 0
-                    currentY += lineHeight + spacing
-                    lineHeight = 0
+                let viewSize = subview.sizeThatFits(.unspecified)
+                if x + viewSize.width > maxWidth, x > 0 {
+                    x = 0
+                    y += rowHeight + spacing
+                    rowHeight = 0
                 }
-                
-                positions.append(CGPoint(x: currentX, y: currentY))
-                currentX += subviewSize.width + spacing
-                lineHeight = max(lineHeight, subviewSize.height)
-                size.width = max(size.width, currentX - spacing)
-                size.height = currentY + lineHeight
+
+                positions.append(CGPoint(x: x, y: y))
+                x += viewSize.width + spacing
+                rowHeight = max(rowHeight, viewSize.height)
             }
-            
-            self.size = size
+
             self.positions = positions
+            self.size = CGSize(width: maxWidth, height: y + rowHeight)
         }
     }
 }
