@@ -247,6 +247,17 @@ private struct DiscoverRecommendationCacheItem: Codable {
     let score: Double
 }
 
+private struct HomeSignalEntry {
+    let title: String
+    let mediaLabel: String
+    let themes: [String]
+}
+
+private struct HomeCrossMediaInsight {
+    let theme: String
+    let entries: [HomeSignalEntry]
+}
+
 private enum RecommendationCacheStore {
     private static let defaults = UserDefaults.standard
 
@@ -2615,6 +2626,7 @@ struct HomeView: View {
     @State private var selectedLibraryMovie: Movie?
     @State private var selectedLibraryShow: TVShow?
     @State private var selectedLibraryBook: Book?
+    @AppStorage("home_suggestions_last_refresh_ts_v1") private var lastHomeSuggestionRefreshTimestamp: Double = 0
     @Namespace private var immersiveLaunchTransition
 
     private var homeRefreshFingerprint: String {
@@ -2728,6 +2740,95 @@ private var crossMediaThemeCount: Int {
         if podcastSet.contains(theme) { hits += 1 }
         return hits >= 2
     }.count
+}
+
+private var completedItemCount: Int {
+    movies.filter { $0.watchedDate != nil }.count
+        + tvShows.filter { $0.watchedDate != nil }.count
+        + books.filter { $0.watchedDate != nil }.count
+        + podcasts.filter { $0.completedAt != nil }.count
+}
+
+private var inProgressItemCount: Int {
+    inProgressEpisodes.count
+}
+
+private var plannedItemCount: Int {
+    max(totalItems - completedItemCount - inProgressItemCount, 0)
+}
+
+private var completionRate: Double {
+    guard totalItems > 0 else { return 0 }
+    return Double(completedItemCount) / Double(totalItems)
+}
+
+private var homeSignalEntries: [HomeSignalEntry] {
+    let movieEntries = movies.map { item in
+        HomeSignalEntry(
+            title: item.title,
+            mediaLabel: "Movie",
+            themes: ThemeExtractor.shared.normalizeThemes(item.themes)
+        )
+    }
+    let tvEntries = tvShows.map { item in
+        HomeSignalEntry(
+            title: item.title,
+            mediaLabel: "TV",
+            themes: ThemeExtractor.shared.normalizeThemes(item.themes)
+        )
+    }
+    let bookEntries = books.map { item in
+        HomeSignalEntry(
+            title: item.title,
+            mediaLabel: "Book",
+            themes: ThemeExtractor.shared.normalizeThemes(item.themes)
+        )
+    }
+    let podcastEntries = podcasts.map { item in
+        HomeSignalEntry(
+            title: item.title,
+            mediaLabel: "Podcast",
+            themes: ThemeExtractor.shared.normalizeThemes(item.themes)
+        )
+    }
+    return movieEntries + tvEntries + bookEntries + podcastEntries
+}
+
+private var primaryCrossMediaInsight: HomeCrossMediaInsight? {
+    let nonEmpty = homeSignalEntries.filter { !$0.themes.isEmpty }
+    guard !nonEmpty.isEmpty else { return nil }
+
+    var grouped: [String: [HomeSignalEntry]] = [:]
+    for entry in nonEmpty {
+        for theme in entry.themes {
+            grouped[theme, default: []].append(entry)
+        }
+    }
+
+    let candidates = grouped.compactMap { theme, entries -> HomeCrossMediaInsight? in
+        let mediaKinds = Set(entries.map(\.mediaLabel))
+        guard mediaKinds.count >= 2 else { return nil }
+        return HomeCrossMediaInsight(theme: theme, entries: entries)
+    }
+
+    return candidates.sorted { lhs, rhs in
+        if lhs.entries.count == rhs.entries.count {
+            return lhs.theme < rhs.theme
+        }
+        return lhs.entries.count > rhs.entries.count
+    }.first
+}
+
+private var valueNarrative: String {
+    if let insight = primaryCrossMediaInsight {
+        let names = insight.entries.map(\.title).prefix(3).joined(separator: ", ")
+        let cleanedTheme = insight.theme.replacingOccurrences(of: "-", with: " ").capitalized
+        return "\(cleanedTheme) connects \(names). This is your strongest discovery lane right now."
+    }
+    if totalItems == 0 {
+        return "Add media from at least two types to unlock your first meaningful cross-media connection."
+    }
+    return "Keep adding items and themes; once two media types overlap, discovery quality rises quickly."
 }
 
 private var strongestThemeLabel: String {
@@ -2857,18 +2958,25 @@ private var knowledgePulseItems: [HomePulseMetric] {
             tint: .cyan
         ),
         HomePulseMetric(
-            title: "Strongest Theme",
-            value: strongestThemeLabel,
-            detail: "top recurring signal",
-            symbol: "sparkle",
-            tint: .yellow
-        ),
-        HomePulseMetric(
             title: "Cross-Media",
             value: "\(crossMediaThemeCount)",
             detail: "themes connecting 2+ media types",
             symbol: "point.3.connected.trianglepath.dotted",
             tint: .green
+        ),
+        HomePulseMetric(
+            title: "Completion",
+            value: "\(Int((completionRate * 100).rounded()))%",
+            detail: "\(completedItemCount) done · \(plannedItemCount) planned",
+            symbol: "checkmark.seal.fill",
+            tint: .mint
+        ),
+        HomePulseMetric(
+            title: "In Progress",
+            value: "\(inProgressItemCount)",
+            detail: "active listening sessions right now",
+            symbol: "play.circle.fill",
+            tint: .blue
         )
     ]
 }
@@ -2901,6 +3009,13 @@ var body: some View {
                     HomeKnowledgePulseCard(metrics: knowledgePulseItems)
                         .homeEntrance(step: 1, active: animateIn)
                         .padding(.horizontal, 16)
+
+                    HomeValueNarrativeCard(
+                        narrative: valueNarrative,
+                        insight: primaryCrossMediaInsight
+                    )
+                    .homeEntrance(step: 2, active: animateIn)
+                    .padding(.horizontal, 16)
 
                     HomeContinueLoopCard(actions: continueActions, onTap: openContinueAction)
                         .homeEntrance(step: 2, active: animateIn)
@@ -3100,27 +3215,31 @@ private func loadHomeSuggestions() async {
             homeSuggestions = []
             return
         }
+if let cached: [HomeSuggestionCacheItem] = RecommendationCacheStore.load(
+    key: homeCacheKey,
+    maxAge: 60 * 60 * 8,
+    as: [HomeSuggestionCacheItem].self
+) {
+    homeSuggestions = cached.map { item in
+        HomeSuggestion(
+            id: item.id,
+            title: item.title,
+            subtitle: item.subtitle,
+            posterURL: normalizedRemoteURL(from: item.posterURL),
+            reason: item.reason,
+            mediaType: item.mediaType,
+            score: item.score
+        )
+    }
 
-        if let cached: [HomeSuggestionCacheItem] = RecommendationCacheStore.load(
-            key: homeCacheKey,
-            maxAge: 60 * 60 * 8,
-            as: [HomeSuggestionCacheItem].self
-        ) {
-            homeSuggestions = cached.map { item in
-                HomeSuggestion(
-                    id: item.id,
-                    title: item.title,
-                    subtitle: item.subtitle,
-                    posterURL: normalizedRemoteURL(from: item.posterURL),
-                    reason: item.reason,
-                    mediaType: item.mediaType,
-                    score: item.score
-                )
-            }
-            return
-        }
+    let now = Date().timeIntervalSince1970
+    if now - lastHomeSuggestionRefreshTimestamp < (60 * 20) {
+        return
+    }
+}
 
-        isLoadingSuggestions = true
+let hasVisibleSuggestions = !homeSuggestions.isEmpty
+isLoadingSuggestions = !hasVisibleSuggestions
         defer { isLoadingSuggestions = false }
 
         let existingMovieIDs = Set(movies.compactMap(\.tmdbID))
@@ -3191,66 +3310,92 @@ private func loadHomeSuggestions() async {
             .sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
             .prefix(2)
             .compactMap(\.tmdbID)
-
-        for seed in movieSeeds {
-            if candidates.count >= maxCandidatePool { break }
+var movieRecommendationsBySeed: [Int: [TMDBMovie]] = [:]
+await withTaskGroup(of: (Int, [TMDBMovie]).self) { group in
+    for seed in movieSeeds {
+        group.addTask {
             let similar = (try? await TMDBService.shared.getMovieRecommendations(movieID: seed, page: 1)) ?? []
-            for item in similar where !existingMovieIDs.contains(item.id) {
-                candidates.append(
-                    HomeSuggestion(
-                        id: "movie-\(item.id)",
-                        title: item.title,
-                        subtitle: item.year.map(String.init) ?? "Movie",
-                        posterURL: item.posterURL,
-                        reason: "Matched by similar audience taste",
-                        mediaType: .movie,
-                        score: blendedScore(
-                            title: item.title,
-                            overview: item.overview,
-                            voteAverage: item.voteAverage,
-                            voteCount: item.voteCount,
-                            sourceBoost: 1.0,
-                            preferenceProfile: preferenceProfile
-                        ),
-                        movie: item
-                    )
-                )
-            }
+            return (seed, similar)
         }
+    }
+    for await (seed, similar) in group {
+        movieRecommendationsBySeed[seed] = similar
+    }
+}
 
-        let showSeeds = tvShows
+for seed in movieSeeds {
+    if candidates.count >= maxCandidatePool { break }
+    let similar = movieRecommendationsBySeed[seed] ?? []
+    for item in similar where !existingMovieIDs.contains(item.id) {
+        candidates.append(
+            HomeSuggestion(
+                id: "movie-\(item.id)",
+                title: item.title,
+                subtitle: item.year.map(String.init) ?? "Movie",
+                posterURL: item.posterURL,
+                reason: "Matched by similar audience taste",
+                mediaType: .movie,
+                score: blendedScore(
+                    title: item.title,
+                    overview: item.overview,
+                    voteAverage: item.voteAverage,
+                    voteCount: item.voteCount,
+                    sourceBoost: 1.0,
+                    preferenceProfile: preferenceProfile
+                ),
+                movie: item
+            )
+        )
+    }
+}
+
+let showSeeds =
+ tvShows
             .filter { $0.watchedDate != nil }
             .sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
             .prefix(2)
             .compactMap(\.tmdbID)
-
-        for seed in showSeeds {
-            if candidates.count >= maxCandidatePool { break }
+var tvRecommendationsBySeed: [Int: [TMDBTVShow]] = [:]
+await withTaskGroup(of: (Int, [TMDBTVShow]).self) { group in
+    for seed in showSeeds {
+        group.addTask {
             let similar = (try? await TMDBService.shared.getTVRecommendations(tvID: seed, page: 1)) ?? []
-            for item in similar where !existingTVIDs.contains(item.id) {
-                candidates.append(
-                    HomeSuggestion(
-                        id: "tv-\(item.id)",
-                        title: item.title,
-                        subtitle: item.year.map(String.init) ?? "TV Show",
-                        posterURL: item.posterURL,
-                        reason: "Matched by similar audience taste",
-                        mediaType: .tv,
-                        score: blendedScore(
-                            title: item.title,
-                            overview: item.overview,
-                            voteAverage: item.voteAverage,
-                            voteCount: item.voteCount,
-                            sourceBoost: 1.0,
-                            preferenceProfile: preferenceProfile
-                        ),
-                        tvShow: item
-                    )
-                )
-            }
+            return (seed, similar)
         }
+    }
+    for await (seed, similar) in group {
+        tvRecommendationsBySeed[seed] = similar
+    }
+}
 
-        let movieSeedTitles = movies
+for seed in showSeeds {
+    if candidates.count >= maxCandidatePool { break }
+    let similar = tvRecommendationsBySeed[seed] ?? []
+    for item in similar where !existingTVIDs.contains(item.id) {
+        candidates.append(
+            HomeSuggestion(
+                id: "tv-\(item.id)",
+                title: item.title,
+                subtitle: item.year.map(String.init) ?? "TV Show",
+                posterURL: item.posterURL,
+                reason: "Matched by similar audience taste",
+                mediaType: .tv,
+                score: blendedScore(
+                    title: item.title,
+                    overview: item.overview,
+                    voteAverage: item.voteAverage,
+                    voteCount: item.voteCount,
+                    sourceBoost: 1.0,
+                    preferenceProfile: preferenceProfile
+                ),
+                tvShow: item
+            )
+        )
+    }
+}
+
+let movieSeedTitles =
+ movies
             .filter { $0.watchedDate != nil || ($0.rating ?? 0) >= 4.0 }
             .sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
             .prefix(2)
@@ -3261,149 +3406,75 @@ private func loadHomeSuggestions() async {
             .prefix(2)
             .map(\.title)
         let seedTitles = Array(NSOrderedSet(array: movieSeedTitles + tvSeedTitles)) as? [String] ?? []
-
-        for seedTitle in seedTitles {
-            if candidates.count >= maxCandidatePool { break }
+var tasteResultsBySeedTitle: [String: [TasteDiveResult]] = [:]
+await withTaskGroup(of: (String, [TasteDiveResult]).self) { group in
+    for seedTitle in seedTitles {
+        group.addTask {
             let movieResults = (try? await TasteDiveService.shared.similar(query: seedTitle, type: .movie, limit: 6)) ?? []
             let showResults = (try? await TasteDiveService.shared.similar(query: seedTitle, type: .show, limit: 6)) ?? []
-            let tasteResults = movieResults + showResults
-            for tasteResult in tasteResults.prefix(tastePerSeedLimit) {
-                if candidates.count >= maxCandidatePool { break }
-                let mediaHint = parseTasteDiveMediaType(tasteResult.type)
-                switch mediaHint {
-                case .movie:
-                    if let movie = await cachedBestMovieMatch(tasteResult.name),
-                       !existingMovieIDs.contains(movie.id) {
-                        candidates.append(
-                            HomeSuggestion(
-                                id: "movie-\(movie.id)",
-                                title: movie.title,
-                                subtitle: movie.year.map(String.init) ?? "Movie",
-                                posterURL: movie.posterURL,
-                                reason: "Taste graph match from \(seedTitle)",
-                                mediaType: .movie,
-                                score: blendedScore(
-                                    title: movie.title,
-                                    overview: movie.overview,
-                                    voteAverage: movie.voteAverage,
-                                    voteCount: movie.voteCount,
-                                    sourceBoost: 1.3,
-                                    preferenceProfile: preferenceProfile
-                                ),
-                                movie: movie
-                            )
-                        )
-                    }
-                case .tv:
-                    if let show = await cachedBestTVMatch(tasteResult.name),
-                       !existingTVIDs.contains(show.id) {
-                        candidates.append(
-                            HomeSuggestion(
-                                id: "tv-\(show.id)",
-                                title: show.title,
-                                subtitle: show.year.map(String.init) ?? "TV Show",
-                                posterURL: show.posterURL,
-                                reason: "Taste graph match from \(seedTitle)",
-                                mediaType: .tv,
-                                score: blendedScore(
-                                    title: show.title,
-                                    overview: show.overview,
-                                    voteAverage: show.voteAverage,
-                                    voteCount: show.voteCount,
-                                    sourceBoost: 1.3,
-                                    preferenceProfile: preferenceProfile
-                                ),
-                                tvShow: show
-                            )
-                        )
-                    }
-                case .book:
-                    if let book = await cachedBestBookMatch(tasteResult.name) {
-                        let normalizedTitle = book.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                        if existingBookNormalizedTitles.contains(normalizedTitle) { continue }
-                        if let isbn = book.isbn, existingBookISBNs.contains(isbn) { continue }
-
-                        candidates.append(
-                            HomeSuggestion(
-                                id: "book-\(book.id)",
-                                title: book.title,
-                                subtitle: book.author ?? (book.year.map(String.init) ?? "Book"),
-                                posterURL: book.coverURL,
-                                reason: "Cross-media book pick from \(seedTitle)",
-                                mediaType: .book,
-                                score: blendedScore(
-                                    title: book.title,
-                                    overview: book.description,
-                                    voteAverage: book.rating,
-                                    voteCount: book.ratingCount,
-                                    sourceBoost: 1.2,
-                                    preferenceProfile: preferenceProfile
-                                ),
-                                book: book
-                            )
-                        )
-                    }
-                case .unknown:
-                    if let movie = await cachedBestMovieMatch(tasteResult.name),
-                       !existingMovieIDs.contains(movie.id) {
-                        candidates.append(
-                            HomeSuggestion(
-                                id: "movie-\(movie.id)",
-                                title: movie.title,
-                                subtitle: movie.year.map(String.init) ?? "Movie",
-                                posterURL: movie.posterURL,
-                                reason: "Taste graph match from \(seedTitle)",
-                                mediaType: .movie,
-                                score: blendedScore(
-                                    title: movie.title,
-                                    overview: movie.overview,
-                                    voteAverage: movie.voteAverage,
-                                    voteCount: movie.voteCount,
-                                    sourceBoost: 1.25,
-                                    preferenceProfile: preferenceProfile
-                                ),
-                                movie: movie
-                            )
-                        )
-                    } else if let show = await cachedBestTVMatch(tasteResult.name),
-                              !existingTVIDs.contains(show.id) {
-                        candidates.append(
-                            HomeSuggestion(
-                                id: "tv-\(show.id)",
-                                title: show.title,
-                                subtitle: show.year.map(String.init) ?? "TV Show",
-                                posterURL: show.posterURL,
-                                reason: "Taste graph match from \(seedTitle)",
-                                mediaType: .tv,
-                                score: blendedScore(
-                                    title: show.title,
-                                    overview: show.overview,
-                                    voteAverage: show.voteAverage,
-                                    voteCount: show.voteCount,
-                                    sourceBoost: 1.25,
-                                    preferenceProfile: preferenceProfile
-                                ),
-                                tvShow: show
-                            )
-                        )
-                    }
-                }
-            }
+            return (seedTitle, Array((movieResults + showResults).prefix(tastePerSeedLimit)))
         }
+    }
+    for await (seedTitle, results) in group {
+        tasteResultsBySeedTitle[seedTitle] = results
+    }
+}
 
-        let bookSeedTitles = books
-            .filter { $0.watchedDate != nil || ($0.rating ?? 0) >= 4.0 }
-            .sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
-            .prefix(2)
-            .map(\.title)
-        let allSeedTitles = Array(NSOrderedSet(array: seedTitles + bookSeedTitles)) as? [String] ?? seedTitles
-
-        for seedTitle in allSeedTitles {
-            if candidates.count >= maxCandidatePool { break }
-            let bookTasteResults = (try? await TasteDiveService.shared.similar(query: seedTitle, type: .book, limit: 6)) ?? []
-            for tasteResult in bookTasteResults.prefix(tastePerSeedLimit) {
-                if candidates.count >= maxCandidatePool { break }
-                guard let book = await cachedBestBookMatch(tasteResult.name) else { continue }
+for seedTitle in seedTitles {
+    if candidates.count >= maxCandidatePool { break }
+    let tasteResults = tasteResultsBySeedTitle[seedTitle] ?? []
+    for tasteResult in tasteResults {
+        if candidates.count >= maxCandidatePool { break }
+        let mediaHint = parseTasteDiveMediaType(tasteResult.type)
+        switch mediaHint {
+        case .movie:
+            if let movie = await cachedBestMovieMatch(tasteResult.name),
+               !existingMovieIDs.contains(movie.id) {
+                candidates.append(
+                    HomeSuggestion(
+                        id: "movie-\(movie.id)",
+                        title: movie.title,
+                        subtitle: movie.year.map(String.init) ?? "Movie",
+                        posterURL: movie.posterURL,
+                        reason: "Taste graph match from \(seedTitle)",
+                        mediaType: .movie,
+                        score: blendedScore(
+                            title: movie.title,
+                            overview: movie.overview,
+                            voteAverage: movie.voteAverage,
+                            voteCount: movie.voteCount,
+                            sourceBoost: 1.3,
+                            preferenceProfile: preferenceProfile
+                        ),
+                        movie: movie
+                    )
+                )
+            }
+        case .tv:
+            if let show = await cachedBestTVMatch(tasteResult.name),
+               !existingTVIDs.contains(show.id) {
+                candidates.append(
+                    HomeSuggestion(
+                        id: "tv-\(show.id)",
+                        title: show.title,
+                        subtitle: show.year.map(String.init) ?? "TV Show",
+                        posterURL: show.posterURL,
+                        reason: "Taste graph match from \(seedTitle)",
+                        mediaType: .tv,
+                        score: blendedScore(
+                            title: show.title,
+                            overview: show.overview,
+                            voteAverage: show.voteAverage,
+                            voteCount: show.voteCount,
+                            sourceBoost: 1.3,
+                            preferenceProfile: preferenceProfile
+                        ),
+                        tvShow: show
+                    )
+                )
+            }
+        case .book:
+            if let book = await cachedBestBookMatch(tasteResult.name) {
                 let normalizedTitle = book.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 if existingBookNormalizedTitles.contains(normalizedTitle) { continue }
                 if let isbn = book.isbn, existingBookISBNs.contains(isbn) { continue }
@@ -3428,9 +3499,108 @@ private func loadHomeSuggestions() async {
                     )
                 )
             }
+        case .unknown:
+            if let movie = await cachedBestMovieMatch(tasteResult.name),
+               !existingMovieIDs.contains(movie.id) {
+                candidates.append(
+                    HomeSuggestion(
+                        id: "movie-\(movie.id)",
+                        title: movie.title,
+                        subtitle: movie.year.map(String.init) ?? "Movie",
+                        posterURL: movie.posterURL,
+                        reason: "Taste graph match from \(seedTitle)",
+                        mediaType: .movie,
+                        score: blendedScore(
+                            title: movie.title,
+                            overview: movie.overview,
+                            voteAverage: movie.voteAverage,
+                            voteCount: movie.voteCount,
+                            sourceBoost: 1.25,
+                            preferenceProfile: preferenceProfile
+                        ),
+                        movie: movie
+                    )
+                )
+            } else if let show = await cachedBestTVMatch(tasteResult.name),
+                      !existingTVIDs.contains(show.id) {
+                candidates.append(
+                    HomeSuggestion(
+                        id: "tv-\(show.id)",
+                        title: show.title,
+                        subtitle: show.year.map(String.init) ?? "TV Show",
+                        posterURL: show.posterURL,
+                        reason: "Taste graph match from \(seedTitle)",
+                        mediaType: .tv,
+                        score: blendedScore(
+                            title: show.title,
+                            overview: show.overview,
+                            voteAverage: show.voteAverage,
+                            voteCount: show.voteCount,
+                            sourceBoost: 1.25,
+                            preferenceProfile: preferenceProfile
+                        ),
+                        tvShow: show
+                    )
+                )
+            }
         }
+    }
+}
 
-        if candidates.count < 6 {
+let bookSeedTitles =
+ books
+            .filter { $0.watchedDate != nil || ($0.rating ?? 0) >= 4.0 }
+            .sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
+            .prefix(2)
+            .map(\.title)
+        let allSeedTitles = Array(NSOrderedSet(array: seedTitles + bookSeedTitles)) as? [String] ?? seedTitles
+var bookTasteResultsBySeedTitle: [String: [TasteDiveResult]] = [:]
+await withTaskGroup(of: (String, [TasteDiveResult]).self) { group in
+    for seedTitle in allSeedTitles {
+        group.addTask {
+            let results = (try? await TasteDiveService.shared.similar(query: seedTitle, type: .book, limit: 6)) ?? []
+            return (seedTitle, Array(results.prefix(tastePerSeedLimit)))
+        }
+    }
+    for await (seedTitle, results) in group {
+        bookTasteResultsBySeedTitle[seedTitle] = results
+    }
+}
+
+for seedTitle in allSeedTitles {
+    if candidates.count >= maxCandidatePool { break }
+    let bookTasteResults = bookTasteResultsBySeedTitle[seedTitle] ?? []
+    for tasteResult in bookTasteResults {
+        if candidates.count >= maxCandidatePool { break }
+        guard let book = await cachedBestBookMatch(tasteResult.name) else { continue }
+        let normalizedTitle = book.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if existingBookNormalizedTitles.contains(normalizedTitle) { continue }
+        if let isbn = book.isbn, existingBookISBNs.contains(isbn) { continue }
+
+        candidates.append(
+            HomeSuggestion(
+                id: "book-\(book.id)",
+                title: book.title,
+                subtitle: book.author ?? (book.year.map(String.init) ?? "Book"),
+                posterURL: book.coverURL,
+                reason: "Cross-media book pick from \(seedTitle)",
+                mediaType: .book,
+                score: blendedScore(
+                    title: book.title,
+                    overview: book.description,
+                    voteAverage: book.rating,
+                    voteCount: book.ratingCount,
+                    sourceBoost: 1.2,
+                    preferenceProfile: preferenceProfile
+                ),
+                book: book
+            )
+        )
+    }
+}
+
+if candidates.count < 6 {
+
             let trending = (try? await TMDBService.shared.getTrendingAll(timeWindow: .week, page: 1)) ?? []
             var fallback: [HomeSuggestion] = []
 
@@ -3515,6 +3685,7 @@ private func loadHomeSuggestions() async {
             )
         }
         RecommendationCacheStore.store(key: homeCacheKey, payload: cachePayload)
+        lastHomeSuggestionRefreshTimestamp = Date().timeIntervalSince1970
     }
 
     private func buildPreferenceProfile() -> [String: Double] {
@@ -4213,6 +4384,59 @@ private struct HomeContinueAction: Identifiable {
     let tint: Color
     let kind: HomeContinueActionKind
     let targetEpisodeID: String?
+}
+
+private struct HomeValueNarrativeCard: View {
+    let narrative: String
+    let insight: HomeCrossMediaInsight?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles.rectangle.stack")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(ConstellationPalette.accentSoft)
+                Text("Why This Matters")
+                    .font(ConstellationTypeScale.sectionTitle)
+                    .foregroundStyle(.white.opacity(0.95))
+            }
+
+            Text(narrative)
+                .font(ConstellationTypeScale.supporting)
+                .foregroundStyle(.white.opacity(0.84))
+                .lineSpacing(2)
+
+            if let insight {
+                HStack(spacing: 8) {
+                    HomeNarrativeTag(text: insight.theme.replacingOccurrences(of: "-", with: " ").capitalized, tint: .purple)
+                    HomeNarrativeTag(text: "\(Set(insight.entries.map(\.mediaLabel)).count) media types", tint: .cyan)
+                    HomeNarrativeTag(text: "\(insight.entries.count) linked items", tint: .green)
+                }
+            }
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.09))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.14), lineWidth: 0.8)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+private struct HomeNarrativeTag: View {
+    let text: String
+    let tint: Color
+
+    var body: some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.white.opacity(0.9))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(tint.opacity(0.24))
+            .clipShape(Capsule())
+    }
 }
 
 private struct HomeKnowledgePulseCard: View {
