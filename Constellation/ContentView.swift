@@ -2459,31 +2459,42 @@ private struct DiscoverPathCard: View {
             Text(recommendation.reason)
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.84))
+VStack(alignment: .leading, spacing: 6) {
+    Text("Connection Proof")
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.white.opacity(0.9))
+    Text(connectionProofLine)
+        .font(.caption2)
+        .foregroundStyle(.white.opacity(0.82))
+        .lineSpacing(2)
+        .lineLimit(showPath ? 4 : 2)
+    if showPath {
+        Text(recommendation.path.joined(separator: " -> "))
+            .font(.caption2)
+            .foregroundStyle(.white.opacity(0.72))
+            .lineSpacing(2)
+    }
+}
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Why this is strong")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.9))
-                ForEach(reasoningLines, id: \.self) { line in
-                    Text("• \(line)")
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.76))
-                        .lineLimit(2)
-                }
-                if recommendation.targetType == .book {
-                    Text("• \(bookConfidenceBreakdown)")
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.8))
-                        .lineLimit(2)
-                }
-            }
+VStack(alignment: .leading, spacing: 6) {
+    Text("Quality Signals")
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.white.opacity(0.9))
+    HStack(spacing: 8) {
+        transparencyTag(text: confidenceLabel(recommendation.confidence), tint: .purple)
+        transparencyTag(text: publicSignalLine, tint: .blue)
+        transparencyTag(text: pathQualityLine, tint: .green)
+    }
+    VStack(alignment: .leading, spacing: 3) {
+        ForEach(reasoningLines, id: \.self) { line in
+            Text("• \(line)")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.74))
+                .lineLimit(2)
+        }
+    }
+}
 
-            if showPath {
-                Text(recommendation.path.joined(separator: " -> "))
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.76))
-                    .lineSpacing(2)
-            }
 
             HStack(spacing: 10) {
                 Button(showPath ? "Hide Path" : "View Path") {
@@ -2551,49 +2562,77 @@ private struct DiscoverPathCard: View {
         if value >= 0.68 { return "Medium · \(percent)%" }
         return "Exploratory · \(percent)%"
     }
+private func transparencyTag(text: String, tint: Color) -> some View {
+    Text(text)
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.white.opacity(0.88))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(tint.opacity(0.22))
+        .clipShape(Capsule())
+}
 
-    private var reasoningLines: [String] {
-        var lines: [String] = []
-        if let anchor = recommendation.path.first {
-            lines.append("Anchor: \(anchor)")
-        }
-        if recommendation.path.count >= 3 {
-            lines.append("Connection: \(recommendation.path[recommendation.path.count - 2])")
-        }
-        lines.append("Passed connection + public quality filters")
-        return Array(lines.prefix(3))
+private var connectionProofLine: String {
+    var chain = recommendation.path.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    if chain.isEmpty {
+        return recommendation.title
     }
 
-    private var bookConfidenceBreakdown: String {
-        if let book = recommendation.book {
-            let rating = book.rating ?? 0
-            let count = book.ratingCount ?? 0
-            let qualityLabel: String = {
-                if rating >= 4.35 { return "quality high" }
-                if rating >= 4.0 { return "quality strong" }
-                if rating >= 3.8 { return "quality solid" }
-                return "quality emerging"
-            }()
-            let popularityLabel: String = {
-                if count >= 5000 { return "popularity very high" }
-                if count >= 1000 { return "popularity high" }
-                if count >= 200 { return "popularity medium" }
-                return "popularity niche"
-            }()
-            let semanticLabel: String = recommendation.path.contains { $0.lowercased().contains("theme bridge") }
-                ? "semantic bridge match"
-                : "semantic path match"
-            return "\(qualityLabel), \(popularityLabel), \(semanticLabel)"
-        }
-        let semanticLabel = recommendation.path.contains { $0.lowercased().contains("theme bridge") }
-            ? "semantic bridge match"
-            : "semantic path match"
-        let confidenceBucket: String = {
-            if recommendation.confidence >= 0.82 { return "quality high-confidence" }
-            if recommendation.confidence >= 0.7 { return "quality confident" }
-            return "quality medium-confidence"
-        }()
-        return "\(confidenceBucket), popularity validated, \(semanticLabel)"
+    if let first = chain.first, first.caseInsensitiveCompare(recommendation.title) == .orderedSame {
+        chain.removeFirst()
+        chain.insert("Your Library", at: 0)
+    }
+
+    if chain.last?.caseInsensitiveCompare(recommendation.title) != .orderedSame {
+        chain.append(recommendation.title)
+    }
+
+    let clipped = chain.count > 5 ? Array(chain.prefix(5)) + ["…"] : chain
+    return clipped.joined(separator: " -> ")
+}
+
+private var publicSignalLine: String {
+    switch recommendation.targetType {
+    case .movie:
+        let rating = recommendation.movie?.voteAverage ?? 0
+        let count = recommendation.movie?.voteCount ?? 0
+        return String(format: "TMDB %.1f (%d)", rating, count)
+    case .tv:
+        let rating = recommendation.tvShow?.voteAverage ?? 0
+        let count = recommendation.tvShow?.voteCount ?? 0
+        return String(format: "TMDB %.1f (%d)", rating, count)
+    case .book:
+        let rating = recommendation.book?.rating ?? 0
+        let count = recommendation.book?.ratingCount ?? 0
+        return String(format: "Books %.1f (%d)", rating, count)
+    }
+}
+
+private var pathQualityLine: String {
+    switch recommendation.pathFilter {
+    case .adaptation:
+        return "Adaptation path"
+    case .sharedCreator:
+        return "Creator path"
+    case .crossMedia:
+        return "Cross-media path"
+    case .themeBridge:
+        return "Theme bridge"
+    case .all:
+        return "Mixed path"
+    }
+}
+
+private var reasoningLines: [String] {
+    var lines: [String] = []
+    if let anchor = recommendation.path.first {
+        lines.append("Anchor: \(anchor)")
+    }
+    if recommendation.path.count >= 3 {
+        lines.append("Bridge: \(recommendation.path[recommendation.path.count - 2])")
+    }
+    lines.append("Passed quality + popularity floor")
+    return Array(lines.prefix(3))
     }
 }
 
