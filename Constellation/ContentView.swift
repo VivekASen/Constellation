@@ -2410,132 +2410,64 @@ private struct DiscoverPathCard: View {
     let onDislike: () -> Void
     let onHide: () -> Void
     let onDismiss: () -> Void
+
     @State private var showPath = false
     @State private var showActionsMenu = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
-                AsyncImage(url: recommendation.posterURL) { image in
-                    image.resizable().aspectRatio(contentMode: .fill)
-                } placeholder: {
-                    Rectangle().fill(Color.gray.opacity(0.25))
-                }
-                .frame(width: 72, height: 106)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(recommendation.title)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .lineLimit(2)
-                        Spacer(minLength: 0)
-                        Button {
-                            onDismiss()
-                        } label: {
-                            Image(systemName: "hand.thumbsdown")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.white.opacity(0.88))
-                                .frame(width: 28, height: 28)
-                                .background(Color.white.opacity(0.12))
-                                .clipShape(Circle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    Text(recommendation.subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.72))
-
-                    HStack(spacing: 8) {
-                        tag(text: recommendation.targetType.label)
-                        tag(text: recommendation.pathFilter.label)
-                        tag(text: confidenceLabel(recommendation.confidence))
-                    }
-                }
-            }
+        VStack(alignment: .leading, spacing: 12) {
+            headerRow
 
             Text(recommendation.reason)
-                .font(.caption)
+                .font(.footnote)
                 .foregroundStyle(.white.opacity(0.84))
-VStack(alignment: .leading, spacing: 6) {
-    Text("Connection Proof")
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(.white.opacity(0.9))
-    Text(connectionProofLine)
-        .font(.caption2)
-        .foregroundStyle(.white.opacity(0.82))
-        .lineSpacing(2)
-        .lineLimit(showPath ? 4 : 2)
-    if showPath {
-        Text(recommendation.path.joined(separator: " -> "))
-            .font(.caption2)
-            .foregroundStyle(.white.opacity(0.72))
-            .lineSpacing(2)
-    }
-}
-
-VStack(alignment: .leading, spacing: 6) {
-    Text("Quality Signals")
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(.white.opacity(0.9))
-    HStack(spacing: 8) {
-        transparencyTag(text: confidenceLabel(recommendation.confidence), tint: .purple)
-        transparencyTag(text: publicSignalLine, tint: .blue)
-        transparencyTag(text: pathQualityLine, tint: .green)
-    }
-    VStack(alignment: .leading, spacing: 3) {
-        ForEach(reasoningLines, id: \.self) { line in
-            Text("• \(line)")
-                .font(.caption2)
-                .foregroundStyle(.white.opacity(0.74))
                 .lineLimit(2)
-        }
-    }
-}
 
+            sectionBlock(title: "Connection Proof") {
+                Text(connectionProofLine)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.86))
+                    .lineSpacing(2)
+                    .lineLimit(showPath ? 4 : 2)
 
-            HStack(spacing: 10) {
-                Button(showPath ? "Hide Path" : "View Path") {
-                    withAnimation(.easeInOut(duration: 0.18)) { showPath.toggle() }
+                if showPath {
+                    Text(recommendation.path.joined(separator: " -> "))
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.72))
+                        .lineSpacing(2)
                 }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.88))
-
-                Spacer()
-
-                Button("More Like This") { onLike() }
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.green.opacity(0.95))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(Color.green.opacity(0.16))
-                    .clipShape(Capsule())
-
-                Button("Less Like This") { onDislike() }
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.orange.opacity(0.95))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(Color.orange.opacity(0.16))
-                    .clipShape(Capsule())
             }
+
+            sectionBlock(title: "Quality Signals") {
+                HStack(spacing: 8) {
+                    transparencyTag(text: confidenceLabel(recommendation.confidence), tint: .purple)
+                    transparencyTag(text: publicSignalLine, tint: .blue)
+                    transparencyTag(text: pathQualityLine, tint: .green)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(reasoningLines, id: \.self) { line in
+                        Text("• \(line)")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.74))
+                            .lineLimit(2)
+                    }
+                }
+            }
+
+            actionRow
         }
-        .padding(12)
-        .background(Color(red: 0.08, green: 0.11, blue: 0.22).opacity(0.94))
+        .padding(14)
+        .background(cardBackground)
         .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.14), lineWidth: 0.8)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.14), lineWidth: 0.9)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .onTapGesture {
-            openAction()
-        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onTapGesture(perform: openAction)
         .onLongPressGesture(minimumDuration: 0.32) {
-            let generator = UIImpactFeedbackGenerator(style: .medium)
-            generator.impactOccurred()
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             showActionsMenu = true
         }
         .confirmationDialog("Suggestion Actions", isPresented: $showActionsMenu, titleVisibility: .visible) {
@@ -2546,13 +2478,121 @@ VStack(alignment: .leading, spacing: 6) {
         }
     }
 
+    private var headerRow: some View {
+        HStack(alignment: .top, spacing: 12) {
+            AsyncImage(url: recommendation.posterURL) { image in
+                image.resizable().aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Rectangle().fill(Color.gray.opacity(0.25))
+            }
+            .frame(width: 72, height: 106)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    Text(recommendation.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+
+                    Spacer(minLength: 0)
+
+                    Button(action: onDismiss) {
+                        Image(systemName: "hand.thumbsdown")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .frame(width: 28, height: 28)
+                            .background(Color.white.opacity(0.12))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Text(recommendation.subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .lineLimit(1)
+
+                HStack(spacing: 8) {
+                    tag(text: recommendation.targetType.label)
+                    tag(text: recommendation.pathFilter.label)
+                    tag(text: confidenceLabel(recommendation.confidence))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sectionBlock<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.9))
+            content()
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private var actionRow: some View {
+        HStack(spacing: 10) {
+            Button(showPath ? "Hide Path" : "View Path") {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showPath.toggle()
+                }
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.white.opacity(0.9))
+
+            Spacer()
+
+            Button("More Like This") { onLike() }
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.green.opacity(0.95))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Color.green.opacity(0.16))
+                .clipShape(Capsule())
+
+            Button("Less Like This") { onDislike() }
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.orange.opacity(0.95))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Color.orange.opacity(0.16))
+                .clipShape(Capsule())
+        }
+    }
+
+    private var cardBackground: some View {
+        LinearGradient(
+            colors: [
+                Color(red: 0.07, green: 0.10, blue: 0.22).opacity(0.96),
+                Color(red: 0.08, green: 0.12, blue: 0.26).opacity(0.96)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
     private func tag(text: String) -> some View {
         Text(text)
             .font(.caption2.weight(.semibold))
-            .foregroundStyle(.white.opacity(0.86))
+            .foregroundStyle(.white.opacity(0.88))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(Color.white.opacity(0.14))
+            .clipShape(Capsule())
+    }
+
+    private func transparencyTag(text: String, tint: Color) -> some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.white.opacity(0.88))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(tint.opacity(0.22))
             .clipShape(Capsule())
     }
 
@@ -2562,81 +2602,73 @@ VStack(alignment: .leading, spacing: 6) {
         if value >= 0.68 { return "Medium · \(percent)%" }
         return "Exploratory · \(percent)%"
     }
-private func transparencyTag(text: String, tint: Color) -> some View {
-    Text(text)
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(.white.opacity(0.88))
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(tint.opacity(0.22))
-        .clipShape(Capsule())
-}
 
-private var connectionProofLine: String {
-    var chain = recommendation.path.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    if chain.isEmpty {
-        return recommendation.title
+    private var connectionProofLine: String {
+        var chain = recommendation.path.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        if chain.isEmpty {
+            return recommendation.title
+        }
+
+        if let first = chain.first, first.caseInsensitiveCompare(recommendation.title) == .orderedSame {
+            chain.removeFirst()
+            chain.insert("Your Library", at: 0)
+        }
+
+        if chain.last?.caseInsensitiveCompare(recommendation.title) != .orderedSame {
+            chain.append(recommendation.title)
+        }
+
+        let clipped = chain.count > 5 ? Array(chain.prefix(5)) + ["…"] : chain
+        return clipped.joined(separator: " -> ")
     }
 
-    if let first = chain.first, first.caseInsensitiveCompare(recommendation.title) == .orderedSame {
-        chain.removeFirst()
-        chain.insert("Your Library", at: 0)
+    private var publicSignalLine: String {
+        switch recommendation.targetType {
+        case .movie:
+            let rating = recommendation.movie?.voteAverage ?? 0
+            let count = recommendation.movie?.voteCount ?? 0
+            return String(format: "TMDB %.1f (%d)", rating, count)
+        case .tv:
+            let rating = recommendation.tvShow?.voteAverage ?? 0
+            let count = recommendation.tvShow?.voteCount ?? 0
+            return String(format: "TMDB %.1f (%d)", rating, count)
+        case .book:
+            let rating = recommendation.book?.rating ?? 0
+            let count = recommendation.book?.ratingCount ?? 0
+            return String(format: "Books %.1f (%d)", rating, count)
+        }
     }
 
-    if chain.last?.caseInsensitiveCompare(recommendation.title) != .orderedSame {
-        chain.append(recommendation.title)
+    private var pathQualityLine: String {
+        switch recommendation.pathFilter {
+        case .adaptation:
+            return "Adaptation path"
+        case .sharedCreator:
+            return "Creator path"
+        case .crossMedia:
+            return "Cross-media path"
+        case .themeBridge:
+            return "Theme bridge"
+        case .all:
+            return "Mixed path"
+        }
     }
 
-    let clipped = chain.count > 5 ? Array(chain.prefix(5)) + ["…"] : chain
-    return clipped.joined(separator: " -> ")
-}
-
-private var publicSignalLine: String {
-    switch recommendation.targetType {
-    case .movie:
-        let rating = recommendation.movie?.voteAverage ?? 0
-        let count = recommendation.movie?.voteCount ?? 0
-        return String(format: "TMDB %.1f (%d)", rating, count)
-    case .tv:
-        let rating = recommendation.tvShow?.voteAverage ?? 0
-        let count = recommendation.tvShow?.voteCount ?? 0
-        return String(format: "TMDB %.1f (%d)", rating, count)
-    case .book:
-        let rating = recommendation.book?.rating ?? 0
-        let count = recommendation.book?.ratingCount ?? 0
-        return String(format: "Books %.1f (%d)", rating, count)
-    }
-}
-
-private var pathQualityLine: String {
-    switch recommendation.pathFilter {
-    case .adaptation:
-        return "Adaptation path"
-    case .sharedCreator:
-        return "Creator path"
-    case .crossMedia:
-        return "Cross-media path"
-    case .themeBridge:
-        return "Theme bridge"
-    case .all:
-        return "Mixed path"
-    }
-}
-
-private var reasoningLines: [String] {
-    var lines: [String] = []
-    if let anchor = recommendation.path.first {
-        lines.append("Anchor: \(anchor)")
-    }
-    if recommendation.path.count >= 3 {
-        lines.append("Bridge: \(recommendation.path[recommendation.path.count - 2])")
-    }
-    lines.append("Passed quality + popularity floor")
-    return Array(lines.prefix(3))
+    private var reasoningLines: [String] {
+        var lines: [String] = []
+        if let anchor = recommendation.path.first {
+            lines.append("Anchor: \(anchor)")
+        }
+        if recommendation.path.count >= 3 {
+            lines.append("Bridge: \(recommendation.path[recommendation.path.count - 2])")
+        }
+        lines.append("Passed quality + popularity floor")
+        return Array(lines.prefix(3))
     }
 }
 
-private extension DiscoverTargetType {
+private extension DiscoverTargetType
+ {
     var label: String {
         switch self {
         case .movie: return "Movie"
