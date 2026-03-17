@@ -51,9 +51,11 @@ struct LibraryView: View {
                 case .all:
                     return true
                 case .inProgress:
-                    return entry.isInProgress
+                    return entry.statusCategory == .inProgress
+                case .planned:
+                    return entry.statusCategory == .planned
                 case .completed:
-                    return entry.isCompleted
+                    return entry.statusCategory == .completed
                 }
             }
         }
@@ -66,6 +68,13 @@ struct LibraryView: View {
         }
 
         switch filterState.sort {
+        case .statusPriority:
+            entries.sort { lhs, rhs in
+                if lhs.statusCategory != rhs.statusCategory {
+                    return lhs.statusCategory.sortRank < rhs.statusCategory.sortRank
+                }
+                return lhs.activityDate > rhs.activityDate
+            }
         case .recentlyAdded:
             entries.sort { $0.dateAdded > $1.dateAdded }
         case .recentActivity:
@@ -81,7 +90,12 @@ struct LibraryView: View {
 
     private var groupedEntries: [(String, [LibraryEntry])] {
         guard filterState.groupByType else {
-            return [("Library", filteredEntries)]
+            let byStatus = Dictionary(grouping: filteredEntries, by: { $0.statusCategory })
+            let order: [LibraryEntryStatus] = [.inProgress, .planned, .completed]
+            return order.compactMap { status in
+                guard let values = byStatus[status], !values.isEmpty else { return nil }
+                return (status.label, values)
+            }
         }
 
         let groups = Dictionary(grouping: filteredEntries, by: { $0.groupLabel })
@@ -138,6 +152,55 @@ struct LibraryView: View {
             .map { $0 }
     }
 
+    private var personalRankingInsight: String? {
+        var picks: [(String, Double)] = []
+        picks.append(contentsOf: movies.compactMap { movie in
+            guard let rating = movie.rating else { return nil }
+            return (movie.title, rating)
+        })
+        picks.append(contentsOf: tvShows.compactMap { show in
+            guard let rating = show.rating else { return nil }
+            return (show.title, rating)
+        })
+        let ranked = picks.sorted { $0.1 > $1.1 }
+        guard let top = ranked.first else { return nil }
+        return "Your top pick: \(top.0) ★\(String(format: "%.1f", top.1))"
+    }
+
+    private var personalRankByItemKey: [String: Int] {
+        var scored: [(String, Double)] = []
+        scored.append(contentsOf: movies.compactMap { movie in
+            guard let rating = movie.rating else { return nil }
+            return ("movie:\(movie.id.uuidString)", rating)
+        })
+        scored.append(contentsOf: tvShows.compactMap { show in
+            guard let rating = show.rating else { return nil }
+            return ("tv:\(show.id.uuidString)", rating)
+        })
+
+        let ranked = scored.sorted { lhs, rhs in
+            if lhs.1 == rhs.1 { return lhs.0 < rhs.0 }
+            return lhs.1 > rhs.1
+        }
+
+        var result: [String: Int] = [:]
+        for (index, item) in ranked.enumerated() {
+            result[item.0] = index + 1
+        }
+        return result
+    }
+
+    private func personalRank(for entry: LibraryEntry) -> Int? {
+        switch entry {
+        case .movie(let movie):
+            return personalRankByItemKey["movie:\(movie.id.uuidString)"]
+        case .tvShow(let show):
+            return personalRankByItemKey["tv:\(show.id.uuidString)"]
+        case .book, .podcastShow:
+            return nil
+        }
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -155,7 +218,7 @@ struct LibraryView: View {
                     } else {
                         ForEach(groupedEntries, id: \.0) { section in
                             VStack(alignment: .leading, spacing: 10) {
-                                if filterState.groupByType {
+                                if filterState.groupByType || groupedEntries.count > 1 {
                                     Text(section.0)
                                         .font(ConstellationTypeScale.sectionTitle)
                                         .padding(.horizontal, 4)
@@ -183,7 +246,8 @@ struct LibraryView: View {
                                             typeColor: .purple,
                                             progressLabel: episode.completedAt == nil ? "In Progress" : "Completed",
                                             ratingLine: nil,
-                                            themesHint: episode.themes.isEmpty ? "No themes yet" : episode.themes.prefix(3).map(displayTheme).joined(separator: " · ")
+                                            themesHint: episode.themes.isEmpty ? "No themes yet" : episode.themes.prefix(3).map(displayTheme).joined(separator: " · "),
+                                            rankingLabel: nil
                                         )
                                     }
                                     .buttonStyle(.plain)
@@ -196,7 +260,7 @@ struct LibraryView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 24)
             }
-            .background(ConstellationPalette.surface.opacity(0.5))
+            .background(libraryBackground)
             .navigationTitle("Library")
             .searchable(text: $searchText, prompt: "Search your library") {
                 ForEach(suggestions) { suggestion in
@@ -256,7 +320,19 @@ struct LibraryView: View {
             .sheet(isPresented: $showingFilterSheet) {
                 LibraryFilterSheet(state: $filterState)
             }
-        }
+    }
+    }
+    
+    private var libraryBackground: Color {
+        Color(.systemBackground)
+    }
+
+    private var controlSurface: Color {
+        Color(.secondarySystemBackground)
+    }
+
+    private var controlSurfaceSubtle: Color {
+        Color(.tertiarySystemBackground)
     }
 
     private var headerControls: some View {
@@ -272,24 +348,37 @@ struct LibraryView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 9)
-                    .background(Color.white.opacity(0.9))
+                    .background(controlSurface)
                     .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
 
                 Spacer()
 
-                Text(filterSummary)
-                    .font(ConstellationTypeScale.caption)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(filterSummary)
+                        .font(ConstellationTypeScale.caption)
+                        .foregroundStyle(.secondary)
+                    if let insight = personalRankingInsight {
+                        Text(insight)
+                            .font(.caption2)
+                            .foregroundStyle(ConstellationPalette.accent)
+                    }
+                }
             }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    quickPill("Now", selected: filterState.status == .inProgress) { filterState.status = .inProgress }
+                    quickPill("On Shelf", selected: filterState.status == .planned) { filterState.status = .planned }
+                    quickPill("Done", selected: filterState.status == .completed) { filterState.status = .completed }
+                    quickPill("All Status", selected: filterState.status == .all) { filterState.status = .all }
 
-            HStack(spacing: 8) {
-                quickPill("All", selected: filterState.type == .all) { filterState.type = .all }
-                quickPill("Movies", selected: filterState.type == .movies) { filterState.type = .movies }
-                quickPill("TV", selected: filterState.type == .tv) { filterState.type = .tv }
-                quickPill("Books", selected: filterState.type == .books) { filterState.type = .books }
-                quickPill("Podcasts", selected: filterState.type == .podcasts) { filterState.type = .podcasts }
+                    quickPill("All Media", selected: filterState.type == .all) { filterState.type = .all }
+                    quickPill("Movies", selected: filterState.type == .movies) { filterState.type = .movies }
+                    quickPill("TV", selected: filterState.type == .tv) { filterState.type = .tv }
+                    quickPill("Books", selected: filterState.type == .books) { filterState.type = .books }
+                    quickPill("Podcasts", selected: filterState.type == .podcasts) { filterState.type = .podcasts }
+                }
             }
         }
     }
@@ -300,8 +389,8 @@ struct LibraryView: View {
                 .font(ConstellationTypeScale.caption.weight(.semibold))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
-                .background(selected ? ConstellationPalette.accent.opacity(0.16) : Color.white.opacity(0.8))
-                .foregroundStyle(selected ? ConstellationPalette.accent : .secondary)
+                .background(selected ? ConstellationPalette.accent.opacity(0.16) : controlSurfaceSubtle)
+                .foregroundStyle(selected ? ConstellationPalette.accent : .primary)
                 .clipShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -326,8 +415,9 @@ struct LibraryView: View {
                     typeLabel: "Movie",
                     typeColor: .blue,
                     progressLabel: movie.watchedDate == nil ? "Planned" : "Completed",
-                    ratingLine: mediaRatingLine(publicRating: movie.rating, personalRating: nil),
-                    themesHint: movie.themes.isEmpty ? nil : movie.themes.prefix(3).map(displayTheme).joined(separator: " · ")
+                    ratingLine: mediaRatingLine(publicRating: movie.publicRating, publicCount: movie.publicRatingCount, personalRating: movie.rating),
+                    themesHint: movie.themes.isEmpty ? nil : movie.themes.prefix(3).map(displayTheme).joined(separator: " · "),
+                    rankingLabel: personalRank(for: entry).map { "#\($0)" }
                 )
             }
             .buttonStyle(.plain)
@@ -349,8 +439,9 @@ struct LibraryView: View {
                     typeLabel: "TV",
                     typeColor: .green,
                     progressLabel: show.watchedDate == nil ? "Planned" : "Completed",
-                    ratingLine: mediaRatingLine(publicRating: show.rating, personalRating: nil),
-                    themesHint: show.themes.isEmpty ? nil : show.themes.prefix(3).map(displayTheme).joined(separator: " · ")
+                    ratingLine: mediaRatingLine(publicRating: show.publicRating, publicCount: show.publicRatingCount, personalRating: show.rating),
+                    themesHint: show.themes.isEmpty ? nil : show.themes.prefix(3).map(displayTheme).joined(separator: " · "),
+                    rankingLabel: personalRank(for: entry).map { "#\($0)" }
                 )
             }
             .buttonStyle(.plain)
@@ -372,8 +463,9 @@ struct LibraryView: View {
                     typeLabel: "Book",
                     typeColor: .orange,
                     progressLabel: book.watchedDate == nil ? "Planned" : "Completed",
-                    ratingLine: mediaRatingLine(publicRating: book.rating, personalRating: nil),
-                    themesHint: book.themes.isEmpty ? nil : book.themes.prefix(3).map(displayTheme).joined(separator: " · ")
+                    ratingLine: mediaRatingLine(publicRating: book.rating, publicCount: book.ratingCount, personalRating: nil),
+                    themesHint: book.themes.isEmpty ? nil : book.themes.prefix(3).map(displayTheme).joined(separator: " · "),
+                    rankingLabel: nil
                 )
             }
             .buttonStyle(.plain)
@@ -396,17 +488,33 @@ struct LibraryView: View {
                     typeColor: .purple,
                     progressLabel: podcastProgressLabel(for: show),
                     ratingLine: nil,
-                    themesHint: podcastThemeHint(for: show)
+                    themesHint: podcastThemeHint(for: show),
+                    rankingLabel: nil
                 )
             }
             .buttonStyle(.plain)
         }
     }
 
-    private func mediaRatingLine(publicRating: Double?, personalRating: Double?) -> String? {
-        let publicPart = publicRating.map { "Public ★\(String(format: "%.1f", $0))" }
+    private func mediaRatingLine(publicRating: Double?, publicCount: Int?, personalRating: Double?) -> String? {
+        let publicPart = publicRating.map { rating in
+            if let publicCount, publicCount > 0 {
+                return "Public ★\(String(format: "%.1f", rating)) (\(formatCount(publicCount)))"
+            }
+            return "Public ★\(String(format: "%.1f", rating))"
+        }
         let personalPart = personalRating.map { "Yours ★\(String(format: "%.1f", $0))" }
         return [publicPart, personalPart].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    private func formatCount(_ value: Int) -> String {
+        if value >= 1_000_000 {
+            return String(format: "%.1fM", Double(value) / 1_000_000.0)
+        }
+        if value >= 1_000 {
+            return String(format: "%.1fK", Double(value) / 1_000.0)
+        }
+        return "\(value)"
     }
 
     private func podcastProgressLabel(for show: PodcastLibraryShowGroup) -> String {
@@ -513,6 +621,8 @@ struct LibraryView: View {
 }
 
 private struct MediaLibraryCard: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let title: String
     let subtitle: String
     let posterURL: String?
@@ -521,6 +631,7 @@ private struct MediaLibraryCard: View {
     let progressLabel: String
     let ratingLine: String?
     let themesHint: String?
+    let rankingLabel: String?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -537,15 +648,29 @@ private struct MediaLibraryCard: View {
                 HStack(spacing: 8) {
                     Text(title)
                         .font(ConstellationTypeScale.supporting.weight(.semibold))
+                        .foregroundStyle(.primary)
                         .lineLimit(2)
                     Spacer(minLength: 0)
-                    Text(typeLabel)
-                        .font(ConstellationTypeScale.caption.weight(.semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(typeColor.opacity(0.16))
-                        .foregroundStyle(typeColor)
-                        .clipShape(Capsule())
+
+                    HStack(spacing: 6) {
+                        if let rankingLabel, !rankingLabel.isEmpty {
+                            Text(rankingLabel)
+                                .font(ConstellationTypeScale.caption.weight(.semibold))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.yellow.opacity(0.2))
+                                .foregroundStyle(.yellow)
+                                .clipShape(Capsule())
+                        }
+
+                        Text(typeLabel)
+                            .font(ConstellationTypeScale.caption.weight(.semibold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(typeColor.opacity(0.16))
+                            .foregroundStyle(typeColor)
+                            .clipShape(Capsule())
+                    }
                 }
 
                 Text(subtitle)
@@ -580,12 +705,20 @@ private struct MediaLibraryCard: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ConstellationPalette.surfaceStrong)
+        .background(cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ConstellationPalette.border.opacity(0.45), lineWidth: 0.7)
+                .stroke(cardBorder, lineWidth: 0.7)
         }
+    }
+
+    private var cardBackground: Color {
+        colorScheme == .dark ? Color.white.opacity(0.10) : Color.white.opacity(0.94)
+    }
+
+    private var cardBorder: Color {
+        colorScheme == .dark ? Color.white.opacity(0.18) : Color.black.opacity(0.08)
     }
 
     private var progressColor: Color {
@@ -693,7 +826,7 @@ private enum LibrarySearchSuggestion: Identifiable {
 private struct LibraryFilterState {
     var type: LibraryFilterType = .all
     var status: LibraryStatusFilter = .all
-    var sort: LibrarySortOption = .recentlyAdded
+    var sort: LibrarySortOption = .statusPriority
     var groupByType = true
 }
 
@@ -720,6 +853,7 @@ private enum LibraryFilterType: String, CaseIterable, Identifiable {
 private enum LibraryStatusFilter: String, CaseIterable, Identifiable {
     case all
     case inProgress
+    case planned
     case completed
 
     var id: String { rawValue }
@@ -728,12 +862,14 @@ private enum LibraryStatusFilter: String, CaseIterable, Identifiable {
         switch self {
         case .all: return "All"
         case .inProgress: return "In Progress"
+        case .planned: return "On Shelf"
         case .completed: return "Completed"
         }
     }
 }
 
 private enum LibrarySortOption: String, CaseIterable, Identifiable {
+    case statusPriority
     case recentlyAdded
     case recentActivity
     case titleAZ
@@ -743,6 +879,7 @@ private enum LibrarySortOption: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
+        case .statusPriority: return "Priority (Now -> Shelf -> Done)"
         case .recentlyAdded: return "Recently Added"
         case .recentActivity: return "Recent Activity"
         case .titleAZ: return "Title A–Z"
@@ -815,8 +952,8 @@ private enum LibraryEntry: Identifiable {
 
     var publicRating: Double? {
         switch self {
-        case .movie(let movie): return movie.rating
-        case .tvShow(let show): return show.rating
+        case .movie(let movie): return movie.publicRating
+        case .tvShow(let show): return show.publicRating
         case .book(let book): return book.rating
         case .podcastShow: return nil
         }
@@ -833,14 +970,22 @@ private enum LibraryEntry: Identifiable {
     }
 
     var isInProgress: Bool {
+        statusCategory == .inProgress
+    }
+
+    var statusCategory: LibraryEntryStatus {
         switch self {
-        case .movie(let movie): return movie.watchedDate == nil
-        case .tvShow(let show): return show.watchedDate == nil
-        case .book(let book): return book.watchedDate == nil
+        case .movie(let movie):
+            return movie.watchedDate != nil ? .completed : .planned
+        case .tvShow(let show):
+            return show.watchedDate != nil ? .completed : .planned
+        case .book(let book):
+            return book.watchedDate != nil ? .completed : .planned
         case .podcastShow(let show):
-            let hasStarted = show.episodes.contains { $0.currentPositionSeconds > 0 }
-            let hasIncomplete = show.episodes.contains { $0.completedAt == nil }
-            return hasStarted && hasIncomplete
+            let hasStarted = show.episodes.contains { $0.currentPositionSeconds > 0 && $0.completedAt == nil }
+            if hasStarted { return .inProgress }
+            let isDone = !show.episodes.isEmpty && show.episodes.allSatisfy { $0.completedAt != nil }
+            return isDone ? .completed : .planned
         }
     }
 
@@ -855,6 +1000,29 @@ private enum LibraryEntry: Identifiable {
         case .podcastShow(let show):
             let titles = show.episodes.map(\.title)
             return ([show.name] + titles).map { $0.lowercased() }
+        }
+    }
+}
+
+
+private enum LibraryEntryStatus: String, CaseIterable {
+    case inProgress
+    case planned
+    case completed
+
+    var label: String {
+        switch self {
+        case .inProgress: return "In Progress"
+        case .planned: return "On Shelf"
+        case .completed: return "Completed"
+        }
+    }
+
+    var sortRank: Int {
+        switch self {
+        case .inProgress: return 0
+        case .planned: return 1
+        case .completed: return 2
         }
     }
 }

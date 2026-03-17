@@ -3,6 +3,7 @@ import SwiftData
 
 struct MovieDetailView: View {
     let movie: Movie
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
 
     @Query private var allMovies: [Movie]
@@ -90,7 +91,7 @@ struct MovieDetailView: View {
     }
 
     private var headerMetrics: [ConstellationHeroMetric] {
-        let ratingValue = movie.rating.map { String(format: "%.1f", $0) } ?? "-"
+        let ratingValue = movie.publicRating.map { String(format: "%.1f", $0) } ?? "-"
         let yearValue = movie.year.map(String.init) ?? "-"
         return [
             ConstellationHeroMetric(value: ratingValue, label: "Rating", icon: "star.fill"),
@@ -237,6 +238,7 @@ struct MovieDetailView: View {
         }
         .task(id: movie.id) {
             await loadEnhancements()
+            await ensureThemesIfMissing()
         }
     }
 
@@ -253,6 +255,7 @@ struct MovieDetailView: View {
         async let videosTask = TMDBService.shared.getMovieVideos(movieID: tmdbID)
         async let providersTask = TMDBService.shared.getMovieWatchProviders(movieID: tmdbID)
         async let similarTask = TMDBService.shared.getSimilarMovies(movieID: tmdbID)
+        async let detailTask = TMDBService.shared.getMovieDetails(id: tmdbID)
 
         do {
             let videos = try await videosTask
@@ -280,6 +283,25 @@ struct MovieDetailView: View {
         } catch {
             similarMovies = []
         }
+
+        do {
+            let details = try await detailTask
+            if movie.publicRating == nil || movie.publicRatingCount == nil {
+                movie.publicRating = details.voteAverage
+                movie.publicRatingCount = details.voteCount
+                try? modelContext.save()
+            }
+        } catch {
+            // Ignore rating backfill errors.
+        }
+    }
+
+    private func ensureThemesIfMissing() async {
+        guard movie.themes.isEmpty else { return }
+        let generatedThemes = await ThemeExtractor.shared.extractThemes(from: movie)
+        guard !generatedThemes.isEmpty else { return }
+        movie.themes = generatedThemes
+        try? modelContext.save()
     }
 }
 

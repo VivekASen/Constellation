@@ -8,6 +8,7 @@
 
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct MovieSearchView: View {
     @Environment(\.modelContext) private var modelContext
@@ -17,6 +18,7 @@ struct MovieSearchView: View {
     @State private var searchResults: [TMDBMovie] = []
     @State private var isSearching = false
     @State private var selectedMovie: TMDBMovie?
+    @State private var searchTask: Task<Void, Never>?
     
     var body: some View {
         NavigationStack {
@@ -68,12 +70,23 @@ struct MovieSearchView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        dismissKeyboard()
+                    }
+                }
             }
-            .searchable(text: $searchText, prompt: "Search TMDB")
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search TMDB")
+            .scrollDismissesKeyboard(.immediately)
             .onChange(of: searchText) { oldValue, newValue in
-                Task {
+                searchTask?.cancel()
+                searchTask = Task {
                     await performSearch(query: newValue)
                 }
+            }
+            .onDisappear {
+                searchTask?.cancel()
             }
             .sheet(item: $selectedMovie) { movie in
                 MovieDetailSheet(movie: movie)
@@ -91,17 +104,23 @@ struct MovieSearchView: View {
         
         do {
             // Debounce search
-            try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+            try await Task.sleep(nanoseconds: 350_000_000)
             
             guard query == searchText else { return } // User kept typing
             
             let results = try await TMDBService.shared.searchMovies(query: query)
             searchResults = results
+        } catch is CancellationError {
+            return
         } catch {
             print("Search error: \(error)")
         }
         
         isSearching = false
+    }
+
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 }
 
@@ -458,6 +477,8 @@ struct MovieDetailSheet: View {
             posterURL: detail.posterURL?.absoluteString,
             overview: detail.overview,
             genres: detail.genres.map { $0.name },
+            publicRating: detail.voteAverage ?? movie.voteAverage,
+            publicRatingCount: detail.voteCount ?? movie.voteCount,
             rating: isWatched && rating > 0 ? rating : nil,
             watchedDate: isWatched ? watchedDate : nil,
             notes: notes.isEmpty ? nil : notes,

@@ -22,6 +22,7 @@ struct PodcastIndexEpisode: Identifiable, Hashable {
     let imageURL: URL?
     let feedURL: String?
     let guid: String?
+    let transcriptURL: String?
 }
 
 enum PodcastIndexServiceError: LocalizedError {
@@ -132,6 +133,12 @@ final class PodcastIndexService {
             .map { $0 }
     }
 
+    func resolveTranscriptURL(feedID: Int, episodeID: Int) async -> String? {
+        guard feedID > 0, episodeID > 0 else { return nil }
+        let episodes = try? await fetchEpisodes(feedID: feedID, max: 120)
+        return episodes?.first(where: { $0.id == episodeID })?.transcriptURL
+    }
+
     private func searchFeeds(query: String, max: Int) async throws -> [PodcastFeedRecord] {
         let data = try await request(
             path: "/search/byterm",
@@ -178,7 +185,8 @@ final class PodcastIndexService {
             enclosureURL: URL(string: item.enclosureURL ?? ""),
             imageURL: URL(string: item.image ?? item.feedImage ?? ""),
             feedURL: item.feedURL,
-            guid: item.guid
+            guid: item.guid,
+            transcriptURL: item.transcriptURL ?? item.transcripts?.first?.url
         )
     }
 
@@ -372,6 +380,8 @@ private struct PodcastEpisodeRecord: Decodable {
     let feedURL: String?
     let feedID: Int?
     let guid: String?
+    let transcriptURL: String?
+    let transcripts: [PodcastTranscriptRecord]?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -386,6 +396,8 @@ private struct PodcastEpisodeRecord: Decodable {
         case feedURL
         case feedID = "feedId"
         case guid
+        case transcriptURL = "transcriptUrl"
+        case transcripts
     }
 
     init(from decoder: Decoder) throws {
@@ -402,7 +414,13 @@ private struct PodcastEpisodeRecord: Decodable {
         feedURL = try? container.decode(String.self, forKey: .feedURL)
         feedID = try container.decodeFlexibleIntIfPresent(forKey: .feedID)
         guid = try? container.decode(String.self, forKey: .guid)
+        transcriptURL = try? container.decode(String.self, forKey: .transcriptURL)
+        transcripts = try? container.decode([PodcastTranscriptRecord].self, forKey: .transcripts)
     }
+}
+
+private struct PodcastTranscriptRecord: Decodable {
+    let url: String?
 }
 
 private extension KeyedDecodingContainer {

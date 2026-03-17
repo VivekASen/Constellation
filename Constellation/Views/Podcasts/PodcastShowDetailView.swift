@@ -3,6 +3,7 @@ import SwiftData
 
 struct PodcastShowDetailView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.colorScheme) private var colorScheme
     let showName: String
     let episodes: [PodcastEpisode]
     @State private var showingAddEpisodes = false
@@ -35,7 +36,7 @@ struct PodcastShowDetailView: View {
                             .buttonStyle(.plain)
                             .padding(12)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.white.opacity(0.86))
+                            .background(cardBackground)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                             .contextMenu {
                                 Button {
@@ -109,6 +110,10 @@ struct PodcastShowDetailView: View {
         sortedEpisodes.compactMap(\.showAuthor).first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
     }
 
+    private var cardBackground: Color {
+        colorScheme == .dark ? Color.white.opacity(0.12) : Color.white.opacity(0.86)
+    }
+
     private var scopedShow: PodcastIndexShow {
         PodcastIndexShow(
             id: sortedEpisodes.compactMap(\.podcastIndexFeedID).first ?? -1,
@@ -136,6 +141,7 @@ struct PodcastShowDetailView: View {
 }
 
 struct PodcastShowCard: View {
+    @Environment(\.colorScheme) private var colorScheme
     let showName: String
     let episodes: [PodcastEpisode]
 
@@ -161,10 +167,14 @@ struct PodcastShowCard: View {
                 }
             }
             .padding()
-            .background(Color(.systemGray6))
+            .background(cardBackground)
             .clipShape(RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
+    }
+
+    private var cardBackground: Color {
+        colorScheme == .dark ? Color.white.opacity(0.12) : Color.white.opacity(0.86)
     }
 
     private var latestEpisode: PodcastEpisode? {

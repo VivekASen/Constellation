@@ -234,16 +234,9 @@ struct ConstellationPosterView: View {
 
     var body: some View {
         Group {
-            if let imageURL, let url = URL(string: imageURL) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: contentMode)
-                    default:
-                        placeholder
-                    }
+            if imageURL != nil {
+                RemotePosterImageView(imageURL: imageURL, contentMode: contentMode) {
+                    placeholder
                 }
             } else {
                 placeholder

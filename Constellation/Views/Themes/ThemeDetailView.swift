@@ -315,7 +315,7 @@ struct ThemeMovieCard: View {
                         .lineLimit(1)
                 }
                 
-                if let rating = movie.rating {
+                if let rating = movie.publicRating {
                     HStack(spacing: 2) {
                         Image(systemName: "star.fill")
                             .font(.caption)
@@ -382,7 +382,7 @@ struct ThemeTVShowCard: View {
                         .lineLimit(1)
                 }
                 
-                if let rating = show.rating {
+                if let rating = show.publicRating {
                     HStack(spacing: 2) {
                         Image(systemName: "star.fill")
                             .font(.caption)

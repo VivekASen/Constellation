@@ -6,14 +6,25 @@
 //
 
 import SwiftUI
+import UIKit
+import os
+
+private enum GraphMotion {
+    static let quick = Animation.easeInOut(duration: 0.22)
+    static let standard = Animation.easeInOut(duration: 0.28)
+    static let spring = Animation.spring(response: 0.3, dampingFraction: 0.88)
+}
 
 /// Main composition view for the Constellation graph experience.
 /// Home shows an independent 3D preview, while immersive mode exposes full filtering.
 struct ConstellationGraphView: View {
+    @Environment(\.dismiss) private var dismiss
+
     let movies: [Movie]
     let tvShows: [TVShow]
     let books: [Book]
     let collections: [ItemCollection]
+    let autoLaunchImmersive: Bool
     
     @State private var selectedNodeID: String?
     @State private var filter: ConstellationGraphFilter = .all
@@ -32,6 +43,21 @@ struct ConstellationGraphView: View {
     @State private var selectedTVShow: TVShow?
     @State private var selectedBook: Book?
     @State private var selectedTheme: ConstellationThemeSelection?
+    @State private var selectedGenre: ConstellationGenreSelection?
+
+    init(
+        movies: [Movie],
+        tvShows: [TVShow],
+        books: [Book],
+        collections: [ItemCollection],
+        autoLaunchImmersive: Bool = false
+    ) {
+        self.movies = movies
+        self.tvShows = tvShows
+        self.books = books
+        self.collections = collections
+        self.autoLaunchImmersive = autoLaunchImmersive
+    }
     
     // MARK: - Body
     var body: some View {
@@ -47,110 +73,115 @@ struct ConstellationGraphView: View {
         let selectedCollection = selectedCollectionFilter == ConstellationGraphFilterToken.all ? nil : selectedCollectionFilter
         let immersiveGraph = buildGraph(themeFilter: selectedTheme, collectionFilter: selectedCollection, densityMode: densityMode, includeGenres: showGenres)
         
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Constellation Graph")
-                        .font(.headline)
-                    Text("Tap the brain to open immersive mode with filters and deep exploration")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                
-                Spacer()
-                
-                BrainPortalButton {
-                    showImmersiveMode = true
-                }
-            }
-            
-            GeometryReader { proxy in
-                ZStack {
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(Color(.systemGray6))
-                    
-                    Constellation3DPreviewWebView(
-                        nodes: homeNodes,
-                        edges: homeEdges,
-                        selectedNodeID: $selectedNodeID,
-                        resetToken: homeResetToken,
-                        onInteraction: {
-                            hasHomeGraphInteraction = true
-                        },
-                        onOpenNode: { nodeID in
-                            guard let node = homeNodes.first(where: { $0.id == nodeID }) else { return }
-                            openNode(node)
+        Group {
+            if autoLaunchImmersive {
+                Color.clear
+                    .frame(height: 1)
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .center) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Constellation Graph")
+                                .font(.headline)
+                            Text("Tap the brain to open immersive mode with filters and deep exploration")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    
-                    if hasHomeGraphInteraction {
-                        VStack {
-                            HStack {
-                                Button {
-                                    resetViewport()
-                                } label: {
-                                    Label("Reset", systemImage: "scope")
-                                        .font(.caption.weight(.semibold))
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 6)
-                                        .background(Color.black.opacity(0.35))
-                                        .foregroundStyle(.white)
-                                        .clipShape(Capsule())
+
+                        Spacer()
+
+                        BrainPortalButton {
+                            showImmersiveMode = true
+                        }
+                    }
+
+                    GeometryReader { proxy in
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 16)
+                                .fill(Color(.systemGray6))
+
+                            Constellation3DPreviewWebView(
+                                nodes: homeNodes,
+                                edges: homeEdges,
+                                selectedNodeID: $selectedNodeID,
+                                resetToken: homeResetToken,
+                                onInteraction: {
+                                    hasHomeGraphInteraction = true
+                                },
+                                onOpenNode: { nodeID in
+                                    guard let node = homeNodes.first(where: { $0.id == nodeID }) else { return }
+                                    openNode(node)
                                 }
-                                .buttonStyle(.plain)
-                                
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 16))
+
+                            if hasHomeGraphInteraction {
+                                VStack {
+                                    HStack {
+                                        Button {
+                                            resetViewport()
+                                        } label: {
+                                            Label("Reset", systemImage: "scope")
+                                                .font(.caption.weight(.semibold))
+                                                .padding(.horizontal, 10)
+                                                .padding(.vertical, 6)
+                                                .background(Color.black.opacity(0.35))
+                                                .foregroundStyle(.white)
+                                                .clipShape(Capsule())
+                                        }
+                                        .buttonStyle(.plain)
+
+                                        Spacer()
+                                    }
+                                    Spacer()
+                                }
+                                .padding(12)
+                                .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topLeading)))
+                            }
+
+                            if homeNodes.isEmpty {
+                                ContentUnavailableView(
+                                    "No Graph Nodes",
+                                    systemImage: "network",
+                                    description: Text("Add more items to render meaningful graph connections")
+                                )
+                            }
+
+                            VStack {
+                                HStack {
+                                    Spacer()
+                                    genresTogglePill
+                                }
                                 Spacer()
                             }
-                            Spacer()
-                        }
-                        .padding(12)
-                        .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topLeading)))
-                    }
-                    
-                    if homeNodes.isEmpty {
-                        ContentUnavailableView(
-                            "No Graph Nodes",
-                            systemImage: "network",
-                            description: Text("Add more items to render meaningful graph connections")
-                        )
-                    }
+                            .padding(12)
 
-                    VStack {
-                        HStack {
-                            Spacer()
-                            genresTogglePill
+                            if let genreToastMessage {
+                                VStack {
+                                    Spacer()
+                                    Text(genreToastMessage)
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 8)
+                                        .background(Color.black.opacity(0.65))
+                                        .clipShape(Capsule())
+                                        .padding(.bottom, 10)
+                                }
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                            }
                         }
-                        Spacer()
                     }
-                    .padding(12)
+                    .frame(height: 440)
+                    .animation(.spring(response: 0.46, dampingFraction: 0.84), value: selectedThemeFilter)
+                    .animation(.spring(response: 0.46, dampingFraction: 0.84), value: selectedCollectionFilter)
+                    .animation(.spring(response: 0.46, dampingFraction: 0.84), value: filter)
+                    .animation(.spring(response: 0.46, dampingFraction: 0.84), value: densityMode)
 
-                    if let genreToastMessage {
-                        VStack {
-                            Spacer()
-                            Text(genreToastMessage)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(Color.black.opacity(0.65))
-                                .clipShape(Capsule())
-                                .padding(.bottom, 10)
-                        }
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    if let selected = homeNodes.first(where: { $0.id == selectedNodeID }) {
+                        selectedNodePanel(selected)
                     }
                 }
-            }
-            .frame(height: 440)
-            .animation(.spring(response: 0.46, dampingFraction: 0.84), value: selectedThemeFilter)
-            .animation(.spring(response: 0.46, dampingFraction: 0.84), value: selectedCollectionFilter)
-            .animation(.spring(response: 0.46, dampingFraction: 0.84), value: filter)
-            .animation(.spring(response: 0.46, dampingFraction: 0.84), value: densityMode)
-            
-            VisibleNodeLegend(nodes: homeNodes, selectedNodeID: $selectedNodeID)
-            
-            if let selected = homeNodes.first(where: { $0.id == selectedNodeID }) {
-                selectedNodePanel(selected)
             }
         }
         .sheet(item: $selectedMovie) { movie in
@@ -165,9 +196,15 @@ struct ConstellationGraphView: View {
         .sheet(item: $selectedTheme) { theme in
             NavigationStack { ThemeDetailView(themeName: theme.id) }
         }
+        .sheet(item: $selectedGenre) { genre in
+            NavigationStack { GenreDetailView(genreName: genre.id) }
+        }
         .fullScreenCover(isPresented: $showImmersiveMode) {
             ImmersiveConstellationView(
                 graph: immersiveGraph,
+                movies: movies,
+                tvShows: tvShows,
+                books: books,
                 filter: $filter,
                 labelDensity: $labelDensity,
                 densityMode: $densityMode,
@@ -176,12 +213,9 @@ struct ConstellationGraphView: View {
                 selectedCollectionFilter: $selectedCollectionFilter,
                 themeOptions: themeOptions,
                 collectionOptions: collectionOptions,
-                onClose: { showImmersiveMode = false },
-                onOpenNode: { node in
+                onClose: {
                     showImmersiveMode = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                        openNode(node)
-                    }
+                    if autoLaunchImmersive { dismiss() }
                 }
             )
         }
@@ -195,6 +229,13 @@ struct ConstellationGraphView: View {
         .onChange(of: densityMode) { _, _ in resetViewport() }
         .onChange(of: labelDensity) { _, _ in
             selectedNodeID = nil
+        }
+        .onAppear {
+            if autoLaunchImmersive, !showImmersiveMode {
+                DispatchQueue.main.async {
+                    showImmersiveMode = true
+                }
+            }
         }
     }
     
@@ -264,7 +305,9 @@ struct ConstellationGraphView: View {
                 selectedTheme = ConstellationThemeSelection(id: theme)
             }
         case .genre:
-            break
+            if let genre = node.reference {
+                selectedGenre = ConstellationGenreSelection(id: genre)
+            }
         }
     }
 
@@ -293,7 +336,7 @@ struct ConstellationGraphView: View {
         let movieCap = densityMode == .simple ? 10 : 18
         let showCap = densityMode == .simple ? 10 : 18
         let bookCap = densityMode == .simple ? 10 : 18
-        let themeCap = densityMode == .simple ? 6 : 12
+        let themeCap = densityMode == .simple ? 12 : 24
         let genreCap = densityMode == .simple ? 5 : 10
         
         var selectedMovies = Array(
@@ -334,13 +377,14 @@ struct ConstellationGraphView: View {
         if let themeFilter {
             topThemes = themeCounts.keys.contains(themeFilter) ? [themeFilter] : []
         } else {
-            topThemes = themeCounts
+            let rankedThemes = themeCounts
                 .sorted { lhs, rhs in
                     if lhs.value == rhs.value { return lhs.key < rhs.key }
                     return lhs.value > rhs.value
                 }
-                .prefix(themeCap)
                 .map(\.key)
+            // Keep a broad enough theme surface so nodes with valid themes do not appear "orphaned".
+            topThemes = Array(rankedThemes.prefix(themeCap))
         }
 
         let topGenres: [String]
@@ -492,13 +536,17 @@ struct ConstellationGraphView: View {
         let prioritizedEdges = edges
             .sorted {
                 if $0.source.priority == $1.source.priority {
+                    if $0.weight == $1.weight {
+                        return $0.id < $1.id
+                    }
                     return $0.weight > $1.weight
                 }
                 return $0.source.priority > $1.source.priority
             }
-            .prefix(130)
-        
-        let finalEdges = Array(prioritizedEdges)
+        let maxEdgeCount = min(320, max(180, nodes.count * 5))
+        let cappedEdges = prioritizedEdges.prefix(maxEdgeCount)
+
+        let finalEdges = Array(cappedEdges)
         let positions = computeDynamicPositions(
             nodes: nodes,
             edges: finalEdges,
@@ -812,6 +860,9 @@ private struct BrainPortalButton: View {
 
 private struct ImmersiveConstellationView: View {
     let graph: ConstellationGraphData
+    let movies: [Movie]
+    let tvShows: [TVShow]
+    let books: [Book]
     @Binding var filter: ConstellationGraphFilter
     @Binding var labelDensity: ConstellationGraphLabelDensity
     @Binding var densityMode: ConstellationGraphDensityMode
@@ -821,13 +872,77 @@ private struct ImmersiveConstellationView: View {
     let themeOptions: [String]
     let collectionOptions: [ItemCollection]
     let onClose: () -> Void
-    let onOpenNode: (ConstellationGraphNode) -> Void
     
     @State private var selectedNodeID: String?
+    @State private var focusTargetNodeID: String?
     @State private var webResetToken: Int = 0
+    @State private var fitToContentToken: Int = 0
+    @State private var graphRevision: Int = 0
+    @State private var viewportSnapshot: ConstellationGraphViewportSnapshot = .empty
+    @State private var lastViewportUpdateAt: Date = .distantPast
+    @State private var visibleKinds: Set<ConstellationGraphNodeKind> = [.movie, .tvShow, .book, .theme, .genre]
+    @State private var hasAppliedPersistedState = false
+    @State private var showCoachmark = false
+    @State private var showingControlsSheet = false
+    @State private var showingSearchSheet = false
+    @State private var searchQuery = ""
+    @State private var isInteractingWithGraph = false
+    @State private var interactionStartedAt: Date?
+    @State private var selectedMovie: Movie?
+    @State private var selectedTVShow: TVShow?
+    @State private var selectedBook: Book?
+    @State private var selectedTheme: ConstellationThemeSelection?
+    @State private var selectedGenre: ConstellationGenreSelection?
+
+    @AppStorage("immersive_graph_filter") private var persistedFilterRaw = "all"
+    @AppStorage("immersive_graph_density") private var persistedDensityRaw = "detailed"
+    @AppStorage("immersive_graph_labels") private var persistedLabelsRaw = "medium"
+    @AppStorage("immersive_graph_show_genres") private var persistedShowGenres = true
+    @AppStorage("immersive_graph_theme") private var persistedThemeFilter = ConstellationGraphFilterToken.all
+    @AppStorage("immersive_graph_collection") private var persistedCollectionFilter = ConstellationGraphFilterToken.all
+    @AppStorage("immersive_graph_visible_kinds") private var persistedVisibleKindsRaw = "movie,tvShow,book,theme,genre"
+    @AppStorage("immersive_graph_zoom_scale") private var persistedZoomScale = 1.0
+    @AppStorage("immersive_graph_translate_x") private var persistedTranslateX = 0.0
+    @AppStorage("immersive_graph_translate_y") private var persistedTranslateY = 0.0
+    @AppStorage("did_show_neural_graph_coachmark") private var didShowCoachmark = false
+    private let logger = Logger(subsystem: "com.VivekSen.Constellation", category: "ImmersiveGraph")
     
     private var filteredGraph: (nodes: [ConstellationGraphNode], edges: [ConstellationGraphEdge]) {
-        applyConstellationGraphFilter(nodes: graph.nodes, edges: graph.edges, filter: filter)
+        let base = applyConstellationGraphFilter(nodes: graph.nodes, edges: graph.edges, filter: filter)
+        let allowedIDs = Set(base.nodes.filter { visibleKinds.contains($0.kind) }.map(\.id))
+        return (
+            nodes: base.nodes.filter { allowedIDs.contains($0.id) },
+            edges: base.edges.filter { allowedIDs.contains($0.fromID) && allowedIDs.contains($0.toID) }
+        )
+    }
+
+    private var persistedTransform: ConstellationGraphTransform {
+        ConstellationGraphTransform(
+            zoomScale: persistedZoomScale,
+            translateX: persistedTranslateX,
+            translateY: persistedTranslateY
+        )
+    }
+
+    private var searchableNodes: [ConstellationGraphNode] {
+        let base = filteredGraph.nodes.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        guard !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return base }
+        let q = searchQuery.lowercased()
+        return base.filter {
+            $0.title.lowercased().contains(q) || $0.kind.label.lowercased().contains(q)
+        }
+    }
+
+    private var offscreenNodeCount: Int {
+        guard !viewportSnapshot.points.isEmpty else { return 0 }
+        let minX = viewportSnapshot.viewportMinX
+        let maxX = viewportSnapshot.viewportMaxX
+        let minY = viewportSnapshot.viewportMinY
+        let maxY = viewportSnapshot.viewportMaxY
+        return viewportSnapshot.points.reduce(into: 0) { count, point in
+            let isOut = point.x < minX || point.x > maxX || point.y < minY || point.y > maxY
+            if isOut { count += 1 }
+        }
     }
     
     // MARK: - Body
@@ -864,153 +979,969 @@ private struct ImmersiveConstellationView: View {
                         .foregroundStyle(.white)
                     
                     Spacer()
-                    
-                    if let selected = filteredGraph.nodes.first(where: { $0.id == selectedNodeID }) {
-                        Button("Open") {
-                            onOpenNode(selected)
+
+                    HStack(spacing: 8) {
+                        Button {
+                            withAnimation(GraphMotion.quick) {
+                                showingSearchSheet = true
+                            }
+                        } label: {
+                            Image(systemName: "magnifyingglass")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(width: 36, height: 36)
+                                .background(Color.white.opacity(0.12))
+                                .clipShape(Circle())
+                                .foregroundStyle(.white)
                         }
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.cyan.opacity(0.24))
-                        .clipShape(Capsule())
-                        .foregroundStyle(.white)
-                    } else {
-                        Color.clear.frame(width: 52, height: 1)
-                    }
-                    
-                    Button {
-                        resetViewport()
-                    } label: {
-                        Label("Reset", systemImage: "scope")
-                            .font(.subheadline.weight(.semibold))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(Color.white.opacity(0.12))
-                            .clipShape(Capsule())
-                            .foregroundStyle(.white)
+
+                        Button {
+                            withAnimation(GraphMotion.quick) {
+                                resetViewport()
+                            }
+                        } label: {
+                            Image(systemName: "arrow.counterclockwise")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(width: 36, height: 36)
+                                .background(Color.white.opacity(0.12))
+                                .clipShape(Circle())
+                                .foregroundStyle(.white)
+                        }
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
-                
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(ConstellationGraphFilter.allCases, id: \.self) { option in
-                            Button(option.title) {
-                                filter = option
-                                selectedNodeID = nil
-                            }
-                            .font(.caption)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(filter == option ? Color.cyan.opacity(0.25) : Color.white.opacity(0.14))
-                            .foregroundStyle(.white)
-                            .clipShape(Capsule())
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                }
-                
-                Picker("Density", selection: $densityMode) {
-                    ForEach(ConstellationGraphDensityMode.allCases, id: \.self) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
 
-                Toggle(isOn: $showGenres) {
-                    Text("Show Genres")
-                        .font(.caption)
-                        .foregroundStyle(.white)
-                }
-                .toggleStyle(.switch)
-                .tint(.orange)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                
-                Picker("Labels", selection: $labelDensity) {
-                    ForEach(ConstellationGraphLabelDensity.allCases, id: \.self) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                
-                HStack(spacing: 8) {
-                    Menu {
-                        Picker("Theme", selection: $selectedThemeFilter) {
-                            Text("All Themes").tag(ConstellationGraphFilterToken.all)
-                            ForEach(themeOptions, id: \.self) { theme in
-                                Text(theme.replacingOccurrences(of: "-", with: " ").capitalized).tag(theme)
-                            }
-                        }
-                    } label: {
-                        Label(
-                            selectedTheme == nil ? "Theme: All" : "Theme: \(selectedTheme!.replacingOccurrences(of: "-", with: " ").capitalized)",
-                            systemImage: "line.3.horizontal.decrease.circle"
-                        )
-                        .font(.caption)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.white.opacity(0.14))
-                        .foregroundStyle(.white)
-                        .clipShape(Capsule())
-                    }
-                    
-                    Menu {
-                        Picker("Collection", selection: $selectedCollectionFilter) {
-                            Text("All Collections").tag(ConstellationGraphFilterToken.all)
-                            ForEach(collectionOptions, id: \.id) { collection in
-                                Text(collection.name).tag(collection.id.uuidString)
-                            }
-                        }
-                    } label: {
-                        Label(
-                            selectedCollection == nil ? "Collection: All" : "Collection: 1 selected",
-                            systemImage: "square.stack.3d.up"
-                        )
-                        .font(.caption)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.white.opacity(0.14))
-                        .foregroundStyle(.white)
-                        .clipShape(Capsule())
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                
-                GeometryReader { _ in
-                    ConstellationD3WebView(
-                        nodes: filteredGraph.nodes,
-                        edges: filteredGraph.edges,
-                        selectedNodeID: $selectedNodeID,
-                        resetToken: webResetToken,
-                        labelDensity: labelDensity,
-                        onOpenNode: { nodeID in
-                            guard let node = filteredGraph.nodes.first(where: { $0.id == nodeID }) else { return }
-                            onOpenNode(node)
-                        }
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                Text(summaryLine(selectedTheme: selectedTheme, selectedCollection: selectedCollection))
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.78))
+                    .lineLimit(1)
                     .padding(.horizontal, 16)
+                    .padding(.top, 6)
+                
+                GeometryReader { proxy in
+                    let compactMiniMap = proxy.size.width < 390
+                    ZStack(alignment: compactMiniMap ? .topTrailing : .bottomTrailing) {
+                        ConstellationD3WebView(
+                            nodes: filteredGraph.nodes,
+                            edges: filteredGraph.edges,
+                            selectedNodeID: $selectedNodeID,
+                            focusNodeID: focusTargetNodeID,
+                            resetToken: webResetToken,
+                            fitToContentToken: fitToContentToken,
+                            graphRevision: graphRevision,
+                            initialTransform: persistedTransform,
+                            labelDensity: labelDensity,
+                            onOpenNode: { nodeID in
+                                guard let node = filteredGraph.nodes.first(where: { $0.id == nodeID }) else { return }
+                                triggerOpenHaptic()
+                                openNode(node)
+                            },
+                            onViewportChange: { snapshot in
+                                applyViewportSnapshot(snapshot)
+                            },
+                            onInteractionChanged: { isActive in
+                                isInteractingWithGraph = isActive
+                                if isActive {
+                                    interactionStartedAt = Date()
+                                    logger.debug("graph_interaction_started")
+                                } else {
+                                    let elapsed = Date().timeIntervalSince(interactionStartedAt ?? Date())
+                                    logger.debug("graph_interaction_ended duration=\(elapsed, privacy: .public)")
+                                    interactionStartedAt = nil
+                                }
+                            }
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .padding(.horizontal, 16)
+
+                        GraphEdgeVignette(snapshot: viewportSnapshot)
+                            .padding(.horizontal, 16)
+                            .allowsHitTesting(false)
+
+                        VStack {
+                            HStack {
+                                Spacer()
+                                VStack(alignment: .trailing, spacing: 8) {
+                                    GraphNavigatorMiniMap(
+                                        snapshot: viewportSnapshot,
+                                        isCompact: compactMiniMap,
+                                        hideLabels: true
+                                    )
+
+                                    if offscreenNodeCount > 0 {
+                                        Button {
+                                            fitGraphToContent()
+                                        } label: {
+                                            Label("\(offscreenNodeCount) off-screen", systemImage: "scope")
+                                                .font(.caption.weight(.semibold))
+                                                .padding(.horizontal, 10)
+                                                .padding(.vertical, 8)
+                                                .background(Color.black.opacity(0.55))
+                                                .clipShape(Capsule())
+                                        }
+                                        .buttonStyle(.plain)
+                                        .foregroundStyle(.white)
+                                    }
+                                }
+                            }
+                            Spacer()
+                        }
+                        .padding(.top, 12)
+                        .padding(.horizontal, 22)
+
+                        if filteredGraph.nodes.isEmpty {
+                            VStack(spacing: 10) {
+                                Text("No nodes match current controls")
+                                    .font(.subheadline.weight(.semibold))
+                                Button("Clear Filters & Show All") {
+                                    clearAllControls()
+                                }
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(Color.cyan.opacity(0.24))
+                                .clipShape(Capsule())
+                            }
+                            .foregroundStyle(.white)
+                            .padding(14)
+                            .background(Color.black.opacity(0.42))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+
+                        if showCoachmark {
+                            GraphCoachmarkCard {
+                                dismissCoachmark()
+                            }
+                            .padding(.horizontal, 28)
+                            .padding(.top, 18)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        }
+
+                        VStack(spacing: 10) {
+                            Spacer()
+
+                            if let selected = filteredGraph.nodes.first(where: { $0.id == selectedNodeID }) {
+                                GraphSelectionInsightCard(
+                                    node: selected,
+                                    connections: connectionInsights(for: selected, in: filteredGraph)
+                                ) {
+                                    triggerOpenHaptic()
+                                    openNode(selected)
+                                } onFocus: {
+                                    focusSelectedNode()
+                                } onPrevious: {
+                                    selectAdjacentNode(in: filteredGraph.nodes, direction: -1)
+                                } onNext: {
+                                    selectAdjacentNode(in: filteredGraph.nodes, direction: 1)
+                                } onHide: {
+                                    withAnimation(GraphMotion.quick) {
+                                        selectedNodeID = nil
+                                    }
+                                }
+                                .padding(.horizontal, 22)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                            }
+
+                            HStack {
+                                Button {
+                                    withAnimation(GraphMotion.quick) {
+                                        showingControlsSheet = true
+                                    }
+                                } label: {
+                                    Label("Graph Controls", systemImage: "slider.horizontal.3")
+                                        .font(.subheadline.weight(.semibold))
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 10)
+                                        .background(Color.black.opacity(0.52))
+                                        .clipShape(Capsule())
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.white)
+
+                                Spacer()
+                            }
+                            .padding(.horizontal, 22)
+                            .padding(.bottom, 16)
+                        }
+                    }
                 }
-                .padding(.top, 8)
-                .padding(.bottom, 20)
+                .padding(.top, 6)
+                .padding(.bottom, 12)
             }
         }
         .foregroundStyle(.white)
+        .animation(GraphMotion.spring, value: selectedNodeID)
+        .animation(GraphMotion.standard, value: showCoachmark)
+        .animation(GraphMotion.standard, value: isInteractingWithGraph)
+        .onAppear {
+            applyPersistedStateIfNeeded()
+        }
+        .onChange(of: selectedNodeID) { _, newValue in
+            guard newValue != nil else { return }
+            triggerSelectionHaptic()
+            logger.debug("graph_node_selected")
+        }
+        .onChange(of: filter) { _, value in
+            persistedFilterRaw = rawValue(for: value)
+            graphRevision += 1
+        }
+        .onChange(of: densityMode) { _, value in
+            persistedDensityRaw = rawValue(for: value)
+            graphRevision += 1
+        }
+        .onChange(of: labelDensity) { _, value in
+            persistedLabelsRaw = rawValue(for: value)
+            graphRevision += 1
+        }
+        .onChange(of: showGenres) { _, value in
+            persistedShowGenres = value
+            graphRevision += 1
+        }
+        .onChange(of: selectedThemeFilter) { _, value in
+            persistedThemeFilter = value
+            graphRevision += 1
+        }
+        .onChange(of: selectedCollectionFilter) { _, value in
+            persistedCollectionFilter = value
+            graphRevision += 1
+        }
+        .onChange(of: visibleKinds) { _, value in
+            persistedVisibleKindsRaw = value.map { $0.d3Kind }.sorted().joined(separator: ",")
+            graphRevision += 1
+        }
+        .sheet(isPresented: $showingControlsSheet) {
+            NavigationStack {
+                GraphControlsSheetView(
+                    filter: $filter,
+                    selectedThemeFilter: $selectedThemeFilter,
+                    selectedCollectionFilter: $selectedCollectionFilter,
+                    densityMode: $densityMode,
+                    labelDensity: $labelDensity,
+                    showGenres: $showGenres,
+                    visibleKinds: $visibleKinds,
+                    themeOptions: themeOptions,
+                    collectionOptions: collectionOptions,
+                    onReset: {
+                        clearAllControls()
+                    }
+                )
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showingSearchSheet) {
+            NavigationStack {
+                GraphNodeSearchView(
+                    query: $searchQuery,
+                    nodes: searchableNodes
+                ) { node in
+                    selectedNodeID = node.id
+                    focusTargetNodeID = node.id
+                    showingSearchSheet = false
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $selectedMovie) { movie in
+            NavigationStack { MovieDetailView(movie: movie) }
+        }
+        .sheet(item: $selectedTVShow) { show in
+            NavigationStack { TVShowDetailView(show: show) }
+        }
+        .sheet(item: $selectedBook) { book in
+            NavigationStack { BookDetailView(book: book) }
+        }
+        .sheet(item: $selectedTheme) { theme in
+            NavigationStack { ThemeDetailView(themeName: theme.id) }
+        }
+        .sheet(item: $selectedGenre) { genre in
+            NavigationStack { GenreDetailView(genreName: genre.id) }
+        }
     }
     
     // MARK: - Actions
     private func resetViewport() {
         selectedNodeID = nil
+        focusTargetNodeID = nil
         webResetToken += 1
+    }
+
+    private func fitGraphToContent() {
+        selectedNodeID = nil
+        focusTargetNodeID = nil
+        fitToContentToken += 1
+    }
+
+    private func applyViewportSnapshot(_ snapshot: ConstellationGraphViewportSnapshot) {
+        let now = Date()
+        guard now.timeIntervalSince(lastViewportUpdateAt) > 0.22 else { return }
+        lastViewportUpdateAt = now
+        viewportSnapshot = snapshot
+        persistedZoomScale = snapshot.zoomScale
+        persistedTranslateX = snapshot.translateX
+        persistedTranslateY = snapshot.translateY
+    }
+
+    private func summaryLine(selectedTheme: String?, selectedCollection: String?) -> String {
+        let themeText = selectedTheme == nil ? "All Themes" : selectedTheme!.replacingOccurrences(of: "-", with: " ").capitalized
+        let collectionText = selectedCollection == nil ? "All Collections" : "1 Collection"
+        return "\(filter.title) · \(themeText) · \(collectionText)"
+    }
+
+    private func focusSelectedNode() {
+        guard let selectedNodeID else { return }
+        focusTargetNodeID = selectedNodeID
+    }
+
+    private func selectAdjacentNode(in nodes: [ConstellationGraphNode], direction: Int) {
+        guard !nodes.isEmpty else { return }
+        let ordered = nodes.sorted {
+            $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+        }
+
+        if let currentSelectedNodeID = selectedNodeID,
+           let currentIndex = ordered.firstIndex(where: { $0.id == currentSelectedNodeID }) {
+            let nextIndex = (currentIndex + direction + ordered.count) % ordered.count
+            withAnimation(GraphMotion.quick) {
+                selectedNodeID = ordered[nextIndex].id
+            }
+        } else {
+            withAnimation(GraphMotion.quick) {
+                selectedNodeID = ordered[0].id
+            }
+        }
+    }
+
+    private func toggle(kind: ConstellationGraphNodeKind) {
+        if visibleKinds.contains(kind) {
+            if visibleKinds.count > 1 {
+                visibleKinds.remove(kind)
+            }
+        } else {
+            visibleKinds.insert(kind)
+        }
+    }
+
+    private func clearAllControls() {
+        filter = .all
+        densityMode = .detailed
+        labelDensity = .medium
+        showGenres = true
+        selectedThemeFilter = ConstellationGraphFilterToken.all
+        selectedCollectionFilter = ConstellationGraphFilterToken.all
+        visibleKinds = [.movie, .tvShow, .book, .theme, .genre]
+        resetViewport()
+    }
+
+    private func openNode(_ node: ConstellationGraphNode) {
+        logger.debug("graph_open_node kind=\(node.kind.label, privacy: .public)")
+        switch node.kind {
+        case .movie:
+            if let idString = node.reference, let id = UUID(uuidString: idString) {
+                selectedMovie = movies.first(where: { $0.id == id })
+            }
+        case .tvShow:
+            if let idString = node.reference, let id = UUID(uuidString: idString) {
+                selectedTVShow = tvShows.first(where: { $0.id == id })
+            }
+        case .book:
+            if let idString = node.reference, let id = UUID(uuidString: idString) {
+                selectedBook = books.first(where: { $0.id == id })
+            }
+        case .theme:
+            if let theme = node.reference {
+                selectedTheme = ConstellationThemeSelection(id: theme)
+            }
+        case .genre:
+            if let genre = node.reference {
+                selectedGenre = ConstellationGenreSelection(id: genre)
+            }
+        }
+    }
+
+    private func connectionInsights(for node: ConstellationGraphNode, in graphData: (nodes: [ConstellationGraphNode], edges: [ConstellationGraphEdge])) -> [GraphConnectionInsight] {
+        let nodeByID = Dictionary(uniqueKeysWithValues: graphData.nodes.map { ($0.id, $0) })
+        return graphData.edges
+            .compactMap { edge -> GraphConnectionInsight? in
+                guard edge.fromID == node.id || edge.toID == node.id else { return nil }
+                let otherID = edge.fromID == node.id ? edge.toID : edge.fromID
+                guard let other = nodeByID[otherID] else { return nil }
+                let reason: String
+                switch edge.source {
+                case .theme:
+                    reason = "Shared thematic structure"
+                case .genre:
+                    reason = "Shared genre characteristics"
+                case .collection:
+                    reason = "Co-located in one of your collections"
+                case .hybrid:
+                    reason = "Multiple overlap signals (theme/genre/collection)"
+                }
+                return GraphConnectionInsight(title: other.title, kindLabel: other.kind.label, weight: edge.weight, reason: reason)
+            }
+            .sorted {
+                if $0.weight == $1.weight { return $0.title < $1.title }
+                return $0.weight > $1.weight
+            }
+            .prefix(3)
+            .map { $0 }
+    }
+
+    private func dismissCoachmark() {
+        didShowCoachmark = true
+        withAnimation(GraphMotion.quick) {
+            showCoachmark = false
+        }
+    }
+
+    private func applyPersistedStateIfNeeded() {
+        guard !hasAppliedPersistedState else { return }
+        hasAppliedPersistedState = true
+
+        if let restoredFilter = filter(from: persistedFilterRaw) {
+            filter = restoredFilter
+        }
+        if let restoredDensity = density(from: persistedDensityRaw) {
+            densityMode = restoredDensity
+        }
+        if let restoredLabels = labelDensity(from: persistedLabelsRaw) {
+            labelDensity = restoredLabels
+        }
+        showGenres = persistedShowGenres
+
+        let validTheme = persistedThemeFilter == ConstellationGraphFilterToken.all || themeOptions.contains(persistedThemeFilter)
+        selectedThemeFilter = validTheme ? persistedThemeFilter : ConstellationGraphFilterToken.all
+
+        let validCollection = persistedCollectionFilter == ConstellationGraphFilterToken.all || collectionOptions.contains(where: { $0.id.uuidString == persistedCollectionFilter })
+        selectedCollectionFilter = validCollection ? persistedCollectionFilter : ConstellationGraphFilterToken.all
+
+        let restoredKinds = Set(
+            persistedVisibleKindsRaw
+                .split(separator: ",")
+                .compactMap { ConstellationGraphNodeKind.fromD3Kind(String($0)) }
+        )
+        if !restoredKinds.isEmpty {
+            visibleKinds = restoredKinds
+        }
+
+        showCoachmark = !didShowCoachmark
+    }
+
+    private func rawValue(for value: ConstellationGraphFilter) -> String {
+        switch value {
+        case .all: return "all"
+        case .movies: return "movies"
+        case .tvShows: return "tvShows"
+        case .books: return "books"
+        case .themes: return "themes"
+        case .genres: return "genres"
+        }
+    }
+
+    private func filter(from raw: String) -> ConstellationGraphFilter? {
+        switch raw {
+        case "all": return .all
+        case "movies": return .movies
+        case "tvShows": return .tvShows
+        case "books": return .books
+        case "themes": return .themes
+        case "genres": return .genres
+        default: return nil
+        }
+    }
+
+    private func rawValue(for value: ConstellationGraphDensityMode) -> String {
+        switch value {
+        case .simple: return "simple"
+        case .detailed: return "detailed"
+        }
+    }
+
+    private func density(from raw: String) -> ConstellationGraphDensityMode? {
+        switch raw {
+        case "simple": return .simple
+        case "detailed": return .detailed
+        default: return nil
+        }
+    }
+
+    private func rawValue(for value: ConstellationGraphLabelDensity) -> String {
+        switch value {
+        case .low: return "low"
+        case .medium: return "medium"
+        case .high: return "high"
+        }
+    }
+
+    private func labelDensity(from raw: String) -> ConstellationGraphLabelDensity? {
+        switch raw {
+        case "low": return .low
+        case "medium": return .medium
+        case "high": return .high
+        default: return nil
+        }
+    }
+
+    private func triggerSelectionHaptic() {
+        let generator = UISelectionFeedbackGenerator()
+        generator.selectionChanged()
+    }
+
+    private func triggerOpenHaptic() {
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.impactOccurred()
+    }
+}
+
+private extension ConstellationGraphNodeKind {
+    static func fromD3Kind(_ raw: String) -> ConstellationGraphNodeKind? {
+        switch raw {
+        case "movie": return .movie
+        case "tvShow": return .tvShow
+        case "book": return .book
+        case "theme": return .theme
+        case "genre": return .genre
+        default: return nil
+        }
+    }
+}
+
+private struct GraphCoachmarkCard: View {
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Quick Tips")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white.opacity(0.95))
+
+            Text("Pinch to zoom, drag to pan, tap a node to select, double-tap to open.")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.86))
+
+            Button("Got it") {
+                onDismiss()
+            }
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.cyan.opacity(0.26))
+            .clipShape(Capsule())
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.black.opacity(0.48))
+        )
+    }
+}
+
+private struct GraphConnectionInsight: Identifiable {
+    let id = UUID()
+    let title: String
+    let kindLabel: String
+    let weight: Int
+    let reason: String
+}
+
+private struct GraphSelectionInsightCard: View {
+    let node: ConstellationGraphNode
+    let connections: [GraphConnectionInsight]
+    let onOpen: () -> Void
+    let onFocus: () -> Void
+    let onPrevious: () -> Void
+    let onNext: () -> Void
+    let onHide: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Capsule()
+                .fill(Color.white.opacity(0.22))
+                .frame(width: 38, height: 4)
+                .frame(maxWidth: .infinity)
+
+            HStack(alignment: .top, spacing: 10) {
+                Text(node.kind.icon)
+                    .font(.title3)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(node.title)
+                        .font(.headline.weight(.semibold))
+                        .lineLimit(1)
+                    Text(node.kind.label)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+                Spacer()
+            }
+
+            if connections.isEmpty {
+                Text("No strong adjacent links in current filter scope.")
+                    .font(.caption)
+                    .lineSpacing(2)
+                    .foregroundStyle(.white.opacity(0.78))
+            } else {
+                ForEach(connections) { connection in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("\(connection.title) (\(connection.kindLabel))")
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                        Text("\(connection.reason) · strength \(connection.weight)")
+                            .font(.caption2)
+                            .lineSpacing(2)
+                            .foregroundStyle(.white.opacity(0.74))
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    onPrevious()
+                } label: {
+                    Label("Prev", systemImage: "chevron.left")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Button {
+                    onNext()
+                } label: {
+                    Label("Next", systemImage: "chevron.right")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Button("Open", action: onOpen)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                Button("Focus", action: onFocus)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                Button("Hide", action: onHide)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+            .font(.caption.weight(.semibold))
+            .tint(.cyan)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.black.opacity(0.54))
+        )
+        .gesture(
+            DragGesture(minimumDistance: 18)
+                .onEnded { value in
+                    let horizontal = value.translation.width
+                    let vertical = value.translation.height
+                    let absHorizontal = abs(horizontal)
+                    let absVertical = abs(vertical)
+
+                    if vertical > 56, absVertical > absHorizontal {
+                        onHide()
+                        return
+                    }
+
+                    guard absHorizontal > 44, absHorizontal > absVertical else { return }
+                    if horizontal < 0 {
+                        onNext()
+                    } else {
+                        onPrevious()
+                    }
+                }
+        )
+    }
+}
+
+private struct GraphNodeSearchView: View {
+    @Binding var query: String
+    let nodes: [ConstellationGraphNode]
+    let onSelect: (ConstellationGraphNode) -> Void
+
+    var body: some View {
+        List(nodes) { node in
+            Button {
+                onSelect(node)
+            } label: {
+                HStack(spacing: 10) {
+                    Text(node.kind.icon)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(node.title)
+                            .font(.subheadline)
+                        Text(node.kind.label)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+            }
+            .buttonStyle(.plain)
+        }
+        .navigationTitle("Find Node")
+        .searchable(text: $query, prompt: "Search nodes")
+    }
+}
+
+private struct GraphControlsSheetView: View {
+    @Binding var filter: ConstellationGraphFilter
+    @Binding var selectedThemeFilter: String
+    @Binding var selectedCollectionFilter: String
+    @Binding var densityMode: ConstellationGraphDensityMode
+    @Binding var labelDensity: ConstellationGraphLabelDensity
+    @Binding var showGenres: Bool
+    @Binding var visibleKinds: Set<ConstellationGraphNodeKind>
+    let themeOptions: [String]
+    let collectionOptions: [ItemCollection]
+    let onReset: () -> Void
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Type", selection: $filter) {
+                    ForEach(ConstellationGraphFilter.allCases, id: \.self) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+            } header: {
+                sectionHeader("Type Filter")
+            }
+
+            Section {
+                Picker("Theme", selection: $selectedThemeFilter) {
+                    Text("All Themes").tag(ConstellationGraphFilterToken.all)
+                    ForEach(themeOptions, id: \.self) { theme in
+                        Text(theme.replacingOccurrences(of: "-", with: " ").capitalized).tag(theme)
+                    }
+                }
+                Picker("Collection", selection: $selectedCollectionFilter) {
+                    Text("All Collections").tag(ConstellationGraphFilterToken.all)
+                    ForEach(collectionOptions, id: \.id) { collection in
+                        Text(collection.name).tag(collection.id.uuidString)
+                    }
+                }
+            } header: {
+                sectionHeader("Theme & Collection")
+            }
+
+            Section {
+                Picker("Density", selection: $densityMode) {
+                    ForEach(ConstellationGraphDensityMode.allCases, id: \.self) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                Picker("Labels", selection: $labelDensity) {
+                    ForEach(ConstellationGraphLabelDensity.allCases, id: \.self) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                Toggle("Show Genres", isOn: $showGenres)
+            } header: {
+                sectionHeader("Graph")
+            }
+
+            Section {
+                ForEach([ConstellationGraphNodeKind.movie, .tvShow, .book, .theme, .genre], id: \.self) { kind in
+                    Toggle(kind.label, isOn: Binding(
+                        get: { visibleKinds.contains(kind) },
+                        set: { isEnabled in
+                            if isEnabled {
+                                visibleKinds.insert(kind)
+                            } else if visibleKinds.count > 1 {
+                                visibleKinds.remove(kind)
+                            }
+                        }
+                    ))
+                }
+            } header: {
+                sectionHeader("Visible Node Types")
+            }
+
+            Section {
+                ForEach([ConstellationGraphNodeKind.movie, .tvShow, .book, .theme, .genre], id: \.self) { kind in
+                    HStack(spacing: 10) {
+                        Circle()
+                            .fill(kind.color)
+                            .frame(width: 10, height: 10)
+                        Text(kind.label)
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Text(kind.icon)
+                            .font(.subheadline)
+                    }
+                }
+
+                ForEach(ConstellationGraphEdgeSource.allCases, id: \.self) { source in
+                    HStack(alignment: .top, spacing: 10) {
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .fill(edgeLegendColor(for: source))
+                            .frame(width: 16, height: 4)
+                            .padding(.top, 7)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(source.legendTitle)
+                                .font(.subheadline.weight(.semibold))
+                            Text(source.legendDetail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } header: {
+                sectionHeader("Legend")
+            }
+
+            Section {
+                Button("Reset All Controls") {
+                    onReset()
+                }
+                .font(.subheadline.weight(.semibold))
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Graph Controls")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func sectionHeader(_ text: String) -> some View {
+        Text(text)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .textCase(nil)
+            .tracking(0.2)
+    }
+
+    private func edgeLegendColor(for source: ConstellationGraphEdgeSource) -> Color {
+        switch source {
+        case .theme:
+            return Color.gray
+        case .genre:
+            return Color.orange
+        case .collection:
+            return Color.cyan
+        case .hybrid:
+            return Color.mint
+        }
+    }
+}
+
+private struct GraphEdgeVignette: View {
+    let snapshot: ConstellationGraphViewportSnapshot
+
+    private var showLeft: Bool { snapshot.viewportMinX > snapshot.contentMinX + 2 }
+    private var showRight: Bool { snapshot.viewportMaxX < snapshot.contentMaxX - 2 }
+    private var showTop: Bool { snapshot.viewportMinY > snapshot.contentMinY + 2 }
+    private var showBottom: Bool { snapshot.viewportMaxY < snapshot.contentMaxY - 2 }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let w = proxy.size.width
+            let h = proxy.size.height
+            ZStack {
+                if showLeft {
+                    LinearGradient(colors: [Color.black.opacity(0.32), .clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: min(24, w * 0.12), height: h)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                }
+                if showRight {
+                    LinearGradient(colors: [.clear, Color.black.opacity(0.32)], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: min(24, w * 0.12), height: h)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                }
+                if showTop {
+                    LinearGradient(colors: [Color.black.opacity(0.22), .clear], startPoint: .top, endPoint: .bottom)
+                        .frame(width: w, height: min(20, h * 0.1))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                }
+                if showBottom {
+                    LinearGradient(colors: [.clear, Color.black.opacity(0.22)], startPoint: .top, endPoint: .bottom)
+                        .frame(width: w, height: min(20, h * 0.1))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                }
+            }
+        }
+    }
+}
+
+private struct GraphNavigatorMiniMap: View {
+    let snapshot: ConstellationGraphViewportSnapshot
+    var isCompact: Bool = false
+    var hideLabels: Bool = false
+
+    private var worldWidth: Double {
+        max(0.001, snapshot.contentMaxX - snapshot.contentMinX)
+    }
+
+    private var worldHeight: Double {
+        max(0.001, snapshot.contentMaxY - snapshot.contentMinY)
+    }
+
+    private var viewportWidth: Double {
+        max(0.001, snapshot.viewportMaxX - snapshot.viewportMinX)
+    }
+
+    private var viewportHeight: Double {
+        max(0.001, snapshot.viewportMaxY - snapshot.viewportMinY)
+    }
+
+    private var hasOffscreenNodes: Bool {
+        (viewportWidth < worldWidth * 0.97) || (viewportHeight < worldHeight * 0.97)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            GeometryReader { proxy in
+                let width = proxy.size.width
+                let height = proxy.size.height
+                let viewX = ((snapshot.viewportMinX - snapshot.contentMinX) / worldWidth) * width
+                let viewY = ((snapshot.viewportMinY - snapshot.contentMinY) / worldHeight) * height
+                let viewW = (viewportWidth / worldWidth) * width
+                let viewH = (viewportHeight / worldHeight) * height
+
+                ZStack(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.white.opacity(0.08))
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.24), lineWidth: 1)
+
+                    ForEach(snapshot.points, id: \.id) { point in
+                        Circle()
+                            .fill(point.isSelected ? Color.cyan.opacity(0.95) : Color.white.opacity(0.72))
+                            .frame(width: point.isSelected ? 4.5 : 2.4, height: point.isSelected ? 4.5 : 2.4)
+                            .offset(
+                                x: min(max(0, ((point.x - snapshot.contentMinX) / worldWidth) * width), width - (point.isSelected ? 4.5 : 2.4)),
+                                y: min(max(0, ((point.y - snapshot.contentMinY) / worldHeight) * height), height - (point.isSelected ? 4.5 : 2.4))
+                            )
+                    }
+
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.cyan.opacity(0.28))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(Color.cyan.opacity(0.85), lineWidth: 1.2)
+                        )
+                        .frame(
+                            width: max(10, min(width, viewW)),
+                            height: max(10, min(height, viewH))
+                        )
+                        .offset(
+                            x: max(0, min(width - max(10, min(width, viewW)), viewX)),
+                            y: max(0, min(height - max(10, min(height, viewH)), viewY))
+                        )
+                }
+            }
+            .frame(width: isCompact ? 90 : 110, height: isCompact ? 64 : 78)
+
+            if hasOffscreenNodes && !isCompact && !hideLabels {
+                Text("Pan to explore more nodes")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.78))
+            }
+        }
+        .padding(isCompact ? 8 : 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.black.opacity(0.38))
+        )
     }
 }
 
@@ -1023,57 +1954,16 @@ private struct StarfieldBackground: View {
     
     // MARK: - Body
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { timeline in
-            Canvas { context, size in
-                let t = timeline.date.timeIntervalSinceReferenceDate
-                
-                for (index, star) in stars.enumerated() {
-                    let phase = sin(t * 1.5 + Double(index) * 0.38)
-                    let alpha = 0.2 + (phase + 1.0) * 0.25
-                    let radius = 0.8 + CGFloat((phase + 1.0) * 0.65)
-                    let center = CGPoint(x: star.x * size.width, y: star.y * size.height)
-                    
-                    context.fill(
-                        Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)),
-                        with: .color(Color.white.opacity(alpha))
-                    )
-                }
-            }
-        }
-    }
-}
+        Canvas { context, size in
+            for (index, star) in stars.enumerated() {
+                let alpha = 0.2 + Double((index % 7)) * 0.06
+                let radius = 0.8 + CGFloat(index % 3) * 0.6
+                let center = CGPoint(x: star.x * size.width, y: star.y * size.height)
 
-private struct VisibleNodeLegend: View {
-    let nodes: [ConstellationGraphNode]
-    @Binding var selectedNodeID: String?
-    
-    // MARK: - Body
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Visible Nodes")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(nodes.prefix(30)) { node in
-                        Button {
-                            selectedNodeID = node.id
-                        } label: {
-                            HStack(spacing: 6) {
-                                Text(node.kind.icon)
-                                Text(node.title)
-                                    .lineLimit(1)
-                            }
-                            .font(.caption2)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
-                            .background(selectedNodeID == node.id ? node.kind.color.opacity(0.25) : Color.gray.opacity(0.12))
-                            .clipShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+                context.fill(
+                    Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)),
+                    with: .color(Color.white.opacity(alpha))
+                )
             }
         }
     }

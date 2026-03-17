@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct TVShowSearchView: View {
     @Environment(\.modelContext) private var modelContext
@@ -16,6 +17,7 @@ struct TVShowSearchView: View {
     @State private var searchResults: [TMDBTVShow] = []
     @State private var isSearching = false
     @State private var selectedShow: TMDBTVShow?
+    @State private var searchTask: Task<Void, Never>?
     
     var body: some View {
         NavigationStack {
@@ -64,12 +66,23 @@ struct TVShowSearchView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        dismissKeyboard()
+                    }
+                }
             }
-            .searchable(text: $searchText, prompt: "Search TMDB TV")
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search TMDB TV")
+            .scrollDismissesKeyboard(.immediately)
             .onChange(of: searchText) { _, newValue in
-                Task {
+                searchTask?.cancel()
+                searchTask = Task {
                     await performSearch(query: newValue)
                 }
+            }
+            .onDisappear {
+                searchTask?.cancel()
             }
             .sheet(item: $selectedShow) { show in
                 TVShowDetailSheet(show: show)
@@ -86,16 +99,22 @@ struct TVShowSearchView: View {
         isSearching = true
         
         do {
-            try await Task.sleep(nanoseconds: 500_000_000)
+            try await Task.sleep(nanoseconds: 350_000_000)
             guard query == searchText else { return }
             
             let results = try await TMDBService.shared.searchTVShows(query: query)
             searchResults = results
+        } catch is CancellationError {
+            return
         } catch {
             print("TV search error: \(error)")
         }
         
         isSearching = false
+    }
+
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 }
 
@@ -460,6 +479,8 @@ struct TVShowDetailSheet: View {
             genres: detail.genres.map { $0.name },
             seasonCount: detail.numberOfSeasons,
             episodeCount: detail.numberOfEpisodes,
+            publicRating: detail.voteAverage ?? show.voteAverage,
+            publicRatingCount: detail.voteCount ?? show.voteCount,
             rating: isWatched && rating > 0 ? rating : nil,
             watchedDate: isWatched ? watchedDate : nil,
             notes: notes.isEmpty ? nil : notes,

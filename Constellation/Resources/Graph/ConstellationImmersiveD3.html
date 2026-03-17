@@ -7,8 +7,18 @@
       margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
       background: radial-gradient(circle at 20% 15%, #142047 0%, #0a1233 38%, #050c24 100%);
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
     }
-    #root { width: 100%; height: 100%; }
+    #root {
+      width: 100%;
+      height: 100%;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+      touch-action: none;
+    }
     .link { stroke: rgba(210, 220, 255, 0.4); stroke-linecap: round; }
     .node circle { stroke: rgba(255,255,255,0.2); stroke-width: 1.2px; }
     .node text {
@@ -19,6 +29,9 @@
       stroke-width: 3.2px;
       stroke-linejoin: round;
       pointer-events: none;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
     }
     .node.selected circle { stroke: rgba(255,255,255,0.85); stroke-width: 2.5px; }
   </style>
@@ -27,6 +40,9 @@
   <div id="root"></div>
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <script>
+    document.addEventListener("contextmenu", (event) => event.preventDefault(), { passive: false });
+    document.addEventListener("selectstart", (event) => event.preventDefault(), { passive: false });
+
     const initialGraph = __INITIAL_GRAPH_JSON__;
     let graph = initialGraph;
     let selectedNodeId = null;
@@ -36,13 +52,79 @@
     let simulation = null;
     let lastTapAt = { time: 0, id: null };
     let sparkTimer = null;
+    let lastViewportMessage = { at: 0 };
+    let nodesByIdRef = new Map();
+    let linksRef = [];
+    let nodesRef = [];
+    let linkSelectionRef = null;
+    let nodeSelectionRef = null;
+    let labelDensityRef = "medium";
+    let currentZoomScaleRef = 1;
+
+    function emitViewport(nodes, width, height, force) {
+      if (!svgRef || !zoomRef || !window.webkit?.messageHandlers?.viewport) return;
+      const now = Date.now();
+      if (!force && (now - lastViewportMessage.at) < 140) return;
+      lastViewportMessage.at = now;
+
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
+
+      for (const n of nodes) {
+        if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) continue;
+        if (n.x < minX) minX = n.x;
+        if (n.x > maxX) maxX = n.x;
+        if (n.y < minY) minY = n.y;
+        if (n.y > maxY) maxY = n.y;
+      }
+
+      if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minY) || !Number.isFinite(maxY)) {
+        minX = 0;
+        maxX = width;
+        minY = 0;
+        maxY = height;
+      }
+
+      const pad = 28;
+      minX -= pad;
+      maxX += pad;
+      minY -= pad;
+      maxY += pad;
+
+      const transform = d3.zoomTransform(svgRef.node());
+      const left = transform.invertX(0);
+      const right = transform.invertX(width);
+      const top = transform.invertY(0);
+      const bottom = transform.invertY(height);
+
+      window.webkit.messageHandlers.viewport.postMessage({
+        contentMinX: minX,
+        contentMaxX: maxX,
+        contentMinY: minY,
+        contentMaxY: maxY,
+        viewportMinX: Math.min(left, right),
+        viewportMaxX: Math.max(left, right),
+        viewportMinY: Math.min(top, bottom),
+        viewportMaxY: Math.max(top, bottom),
+        zoomScale: transform.k,
+        translateX: transform.x,
+        translateY: transform.y,
+        points: nodes
+          .filter((n) => Number.isFinite(n.x) && Number.isFinite(n.y))
+          .slice(0, 160)
+          .map((n) => ({ x: n.x, y: n.y, selected: n.id === selectedNodeId }))
+      });
+    }
     
     function canShowLabel(node, density, neighbors) {
       if (node.id === selectedNodeId) return true;
       if (neighbors.has(node.id)) return true;
-      if (density === "high") return true;
+      if (currentZoomScaleRef < 0.7) return false;
+      if (density === "high") return currentZoomScaleRef >= 0.75;
       if (density === "medium") return node.kind === "theme";
-      return false;
+      return currentZoomScaleRef >= 1.2 && node.kind === "theme";
     }
     
     function neighborSet(links, id) {
@@ -77,26 +159,57 @@
       
       zoomRef = d3.zoom()
         .scaleExtent([0.45, 3.5])
-        .on("zoom", (event) => stage.attr("transform", event.transform));
+        .on("start", () => {
+          if (window.webkit?.messageHandlers?.interaction) {
+            window.webkit.messageHandlers.interaction.postMessage("start");
+          }
+        })
+        .on("zoom", (event) => {
+          stage.attr("transform", event.transform);
+          currentZoomScaleRef = event.transform.k;
+          if (nodeSelectionRef) {
+            const neighbors = neighborSet(linksRef, selectedNodeId);
+            nodeSelectionRef.select("text")
+              .style("display", (d) => canShowLabel(d, labelDensityRef, neighbors) ? "block" : "none");
+          }
+        })
+        .on("end", () => {
+          if (window.webkit?.messageHandlers?.interaction) {
+            window.webkit.messageHandlers.interaction.postMessage("end");
+          }
+        });
       svgRef.call(zoomRef);
+      svgRef.on("click", (event) => {
+        const target = event?.target;
+        const isBackgroundTap = target === svgRef.node() || target === stage.node();
+        if (!isBackgroundTap) return;
+        if (!selectedNodeId) return;
+
+        selectedNodeId = null;
+        if (window.webkit?.messageHandlers?.nodeTap) {
+          window.webkit.messageHandlers.nodeTap.postMessage("");
+        }
+        applySelectionStyles();
+        emitViewport(nodesRef, width, height, true);
+      });
       
       const links = graph.links.map((d) => ({ ...d }));
       const nodes = graph.nodes.map((d) => ({ ...d }));
       const nodeById = new Map(nodes.map((n) => [n.id, n]));
-      const neighbors = neighborSet(links, selectedNodeId);
+      linksRef = links;
+      nodesRef = nodes;
+      labelDensityRef = graph.labelDensity || "medium";
+      nodesByIdRef.clear();
+      for (const [id, value] of nodeById.entries()) {
+        nodesByIdRef.set(id, value);
+      }
       
       const link = stage.append("g")
         .selectAll("line")
         .data(links)
         .join("line")
         .attr("class", "link")
-        .attr("stroke-width", (d) => Math.min(2.8, 1 + d.weight * 0.45))
-        .attr("stroke-opacity", (d) => {
-          if (!selectedNodeId) return 0.38;
-          const a = typeof d.source === "object" ? d.source.id : d.source;
-          const b = typeof d.target === "object" ? d.target.id : d.target;
-          return (a === selectedNodeId || b === selectedNodeId) ? 0.88 : 0.1;
-        });
+        .attr("stroke-width", (d) => Math.min(2.8, 1 + d.weight * 0.45));
       
       const kindOf = (endpoint) => {
         if (typeof endpoint === "object") return endpoint.kind;
@@ -123,9 +236,31 @@
         .selectAll("g")
         .data(nodes)
         .join("g")
-        .attr("class", (d) => d.id === selectedNodeId ? "node selected" : "node")
+        .attr("class", "node")
         .style("cursor", "pointer")
-        .on("click", (_, d) => {
+        .on("pointerdown", (_, d) => {
+          if (_.preventDefault) _.preventDefault();
+          if (_.stopPropagation) _.stopPropagation();
+          if (d.__holdTimer) {
+            clearTimeout(d.__holdTimer);
+          }
+          d.__holdTimer = setTimeout(() => {
+            d.__holdTimer = null;
+            if (window.webkit?.messageHandlers?.nodeOpen) {
+              window.webkit.messageHandlers.nodeOpen.postMessage(d.id);
+            }
+          }, 420);
+        })
+        .on("pointerup pointerleave pointercancel", (_, d) => {
+          if (_.preventDefault) _.preventDefault();
+          if (d.__holdTimer) {
+            clearTimeout(d.__holdTimer);
+            d.__holdTimer = null;
+          }
+        })
+        .on("click", (event, d) => {
+          if (event.preventDefault) event.preventDefault();
+          if (event.stopPropagation) event.stopPropagation();
           const now = Date.now();
           const isDoubleTap = lastTapAt.id === d.id && (now - lastTapAt.time) < 320;
           lastTapAt.time = now;
@@ -139,8 +274,9 @@
           if (isDoubleTap && window.webkit?.messageHandlers?.nodeOpen) {
             window.webkit.messageHandlers.nodeOpen.postMessage(d.id);
           }
-          
-          render();
+
+          applySelectionStyles();
+          emitViewport(nodesRef, width, height, true);
         })
         .on("dblclick", (event, d) => {
           event.preventDefault();
@@ -150,18 +286,17 @@
         });
       
       node.append("circle")
-        .attr("r", (d) => d.id === selectedNodeId ? 11.5 : 9.4)
-        .attr("fill", (d) => d.color)
-        .attr("fill-opacity", (d) => {
-          if (!selectedNodeId) return 0.95;
-          return (d.id === selectedNodeId || neighbors.has(d.id)) ? 0.98 : 0.32;
-        });
+        .attr("r", 9.4)
+        .attr("fill", (d) => d.color);
       
       node.append("text")
         .attr("dy", -13)
         .attr("text-anchor", "middle")
-        .style("display", (d) => canShowLabel(d, graph.labelDensity, neighbors) ? "block" : "none")
         .text((d) => d.title);
+
+      linkSelectionRef = link;
+      nodeSelectionRef = node;
+      applySelectionStyles();
       
       simulation = d3.forceSimulation(nodes)
         .force("link", d3.forceLink(links).id((d) => d.id).distance((d) => 90 + (d.weight || 1) * 4))
@@ -195,24 +330,6 @@
           });
       }
       
-      node.call(
-        d3.drag()
-          .on("start", (event) => {
-            if (!event.active) simulation.alphaTarget(0.3).restart();
-            event.subject.fx = event.subject.x;
-            event.subject.fy = event.subject.y;
-          })
-          .on("drag", (event) => {
-            event.subject.fx = event.x;
-            event.subject.fy = event.y;
-          })
-          .on("end", (event) => {
-            if (!event.active) simulation.alphaTarget(0);
-            event.subject.fx = null;
-            event.subject.fy = null;
-          })
-      );
-      
       simulation.on("tick", () => {
         link
           .attr("x1", (d) => d.source.x)
@@ -226,16 +343,52 @@
       sparkTimer = d3.timer(() => {
         animateSparks(Date.now() / 1000);
       });
+
+      emitViewport(nodes, width, height, true);
+    }
+
+    function applySelectionStyles() {
+      if (!nodeSelectionRef || !linkSelectionRef) return;
+      const neighbors = neighborSet(linksRef, selectedNodeId);
+
+      linkSelectionRef
+        .attr("stroke-opacity", (d) => {
+          if (!selectedNodeId) return 0.38;
+          const a = typeof d.source === "object" ? d.source.id : d.source;
+          const b = typeof d.target === "object" ? d.target.id : d.target;
+          return (a === selectedNodeId || b === selectedNodeId) ? 0.88 : 0.1;
+        });
+
+      nodeSelectionRef
+        .attr("class", (d) => d.id === selectedNodeId ? "node selected" : "node");
+
+      nodeSelectionRef.select("circle")
+        .attr("r", (d) => d.id === selectedNodeId ? 11.5 : 9.4)
+        .attr("fill-opacity", (d) => {
+          if (!selectedNodeId) return 0.95;
+          return (d.id === selectedNodeId || neighbors.has(d.id)) ? 0.98 : 0.32;
+        });
+
+      nodeSelectionRef.select("text")
+        .style("display", (d) => canShowLabel(d, labelDensityRef, neighbors) ? "block" : "none");
     }
     
     window.__updateGraph = function(nextGraph) {
+      const previousTransform = (svgRef && zoomRef) ? d3.zoomTransform(svgRef.node()) : null;
       graph = nextGraph;
       render();
+      if (previousTransform && svgRef && zoomRef) {
+        svgRef.call(zoomRef.transform, previousTransform);
+        const root = document.getElementById("root");
+        const width = root?.clientWidth || 320;
+        const height = root?.clientHeight || 300;
+        emitViewport(nodesRef, width, height, true);
+      }
     };
     
     window.__selectNode = function(id) {
       selectedNodeId = id;
-      render();
+      applySelectionStyles();
     };
     
     window.__resetView = function() {
@@ -245,6 +398,80 @@
       if (simulation) {
         simulation.alpha(0.85).restart();
       }
+      const root = document.getElementById("root");
+      const width = root?.clientWidth || 320;
+      const height = root?.clientHeight || 300;
+      if (simulation?.nodes) {
+        emitViewport(simulation.nodes(), width, height, true);
+      }
+    };
+
+    window.__fitToContent = function() {
+      if (!svgRef || !zoomRef || !nodesRef || !nodesRef.length) return;
+      const plotted = nodesRef.filter((n) => Number.isFinite(n.x) && Number.isFinite(n.y));
+      if (!plotted.length) return;
+      const root = document.getElementById("root");
+      const width = root?.clientWidth || 320;
+      const height = root?.clientHeight || 300;
+
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
+      for (const n of plotted) {
+        minX = Math.min(minX, n.x);
+        maxX = Math.max(maxX, n.x);
+        minY = Math.min(minY, n.y);
+        maxY = Math.max(maxY, n.y);
+      }
+
+      const graphWidth = Math.max(1, maxX - minX);
+      const graphHeight = Math.max(1, maxY - minY);
+      const padding = 36;
+      const fitScale = Math.min(
+        (width - padding * 2) / graphWidth,
+        (height - padding * 2) / graphHeight
+      );
+      const scale = Math.max(0.35, Math.min(3.4, fitScale));
+      const centerX = (minX + maxX) / 2;
+      const centerY = (minY + maxY) / 2;
+      const transform = d3.zoomIdentity
+        .translate(width / 2, height / 2)
+        .scale(scale)
+        .translate(-centerX, -centerY);
+
+      svgRef.transition().duration(360).call(zoomRef.transform, transform);
+      emitViewport(nodesRef, width, height, true);
+    };
+
+    window.__focusNode = function(id) {
+      if (!id || !svgRef || !zoomRef) return;
+      const target = nodesByIdRef.get(id);
+      if (!target || !Number.isFinite(target.x) || !Number.isFinite(target.y)) return;
+      const root = document.getElementById("root");
+      const width = root?.clientWidth || 320;
+      const height = root?.clientHeight || 300;
+      const scale = 1.9;
+      const transform = d3.zoomIdentity
+        .translate(width / 2, height / 2)
+        .scale(scale)
+        .translate(-target.x, -target.y);
+      svgRef.transition().duration(380).call(zoomRef.transform, transform);
+    };
+
+    window.__setTransform = function(scale, translateX, translateY, animated) {
+      if (!svgRef || !zoomRef) return;
+      if (!Number.isFinite(scale) || !Number.isFinite(translateX) || !Number.isFinite(translateY)) return;
+      const transform = d3.zoomIdentity.translate(translateX, translateY).scale(scale);
+      if (animated) {
+        svgRef.transition().duration(320).call(zoomRef.transform, transform);
+      } else {
+        svgRef.call(zoomRef.transform, transform);
+      }
+      const root = document.getElementById("root");
+      const width = root?.clientWidth || 320;
+      const height = root?.clientHeight || 300;
+      emitViewport(nodesRef, width, height, true);
     };
     
     if (window.d3) {

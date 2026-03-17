@@ -3,6 +3,7 @@ import SwiftData
 
 struct BookDetailView: View {
     @Bindable var book: Book
+    @Environment(\.modelContext) private var modelContext
 
     @Query private var allMovies: [Movie]
     @Query private var allTVShows: [TVShow]
@@ -151,10 +152,21 @@ struct BookDetailView: View {
         .sheet(isPresented: $showConnectionsSheet) {
             MediaConnectionsView(title: "Connections", items: connectionItems)
         }
+        .task(id: book.id) {
+            await ensureThemesIfMissing()
+        }
     }
 
     private func sharedThemes(with themes: [String]) -> [String] {
         let normalizedOther = Set(ThemeExtractor.shared.normalizeThemes(themes))
         return normalizedThemes.filter { normalizedOther.contains($0) }
+    }
+
+    private func ensureThemesIfMissing() async {
+        guard book.themes.isEmpty else { return }
+        let generatedThemes = await ThemeExtractor.shared.extractThemes(from: book)
+        guard !generatedThemes.isEmpty else { return }
+        book.themes = generatedThemes
+        try? modelContext.save()
     }
 }

@@ -3,6 +3,7 @@ import SwiftData
 
 struct TVShowDetailView: View {
     let show: TVShow
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
 
     @Query private var allMovies: [Movie]
@@ -90,7 +91,7 @@ struct TVShowDetailView: View {
     }
 
     private var headerMetrics: [ConstellationHeroMetric] {
-        let ratingValue = show.rating.map { String(format: "%.1f", $0) } ?? "-"
+        let ratingValue = show.publicRating.map { String(format: "%.1f", $0) } ?? "-"
         let yearValue = show.year.map(String.init) ?? "-"
         return [
             ConstellationHeroMetric(value: ratingValue, label: "Rating", icon: "star.fill"),
@@ -237,6 +238,7 @@ struct TVShowDetailView: View {
         }
         .task(id: show.id) {
             await loadEnhancements()
+            await ensureThemesIfMissing()
         }
     }
 
@@ -253,6 +255,7 @@ struct TVShowDetailView: View {
         async let videosTask = TMDBService.shared.getTVVideos(tvID: tmdbID)
         async let providersTask = TMDBService.shared.getTVWatchProviders(tvID: tmdbID)
         async let similarTask = TMDBService.shared.getSimilarTVShows(tvID: tmdbID)
+        async let detailTask = TMDBService.shared.getTVShowDetails(id: tmdbID)
 
         do {
             let videos = try await videosTask
@@ -280,5 +283,24 @@ struct TVShowDetailView: View {
         } catch {
             similarShows = []
         }
+
+        do {
+            let details = try await detailTask
+            if show.publicRating == nil || show.publicRatingCount == nil {
+                show.publicRating = details.voteAverage
+                show.publicRatingCount = details.voteCount
+                try? modelContext.save()
+            }
+        } catch {
+            // Ignore rating backfill errors.
+        }
+    }
+
+    private func ensureThemesIfMissing() async {
+        guard show.themes.isEmpty else { return }
+        let generatedThemes = await ThemeExtractor.shared.extractThemes(from: show)
+        guard !generatedThemes.isEmpty else { return }
+        show.themes = generatedThemes
+        try? modelContext.save()
     }
 }

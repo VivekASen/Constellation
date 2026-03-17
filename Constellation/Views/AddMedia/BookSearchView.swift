@@ -140,20 +140,20 @@ private struct BookSearchCard: View {
     }
 }
 
-private struct BookDetailSheet: View {
+struct BookDetailSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @Query private var existingBooks: [Book]
 
     let book: HardcoverBooksService.SearchBook
-    @State private var addStatus: AddStatus = .planned
+    @State private var addStatus: AddStatus = .readlist
     @State private var readDate = Date()
     @State private var notes = ""
     @State private var showDuplicateAlert = false
 
     private enum AddStatus: String, CaseIterable, Identifiable {
-        case planned
-        case completed
+        case readlist
+        case read
         var id: String { rawValue }
     }
 
@@ -198,6 +198,17 @@ private struct BookDetailSheet: View {
                         }
                     }
 
+                    if let description = book.description, !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Description")
+                                .font(.subheadline.weight(.semibold))
+                            Text(description)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+
                     if !book.subjects.isEmpty {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack {
@@ -217,13 +228,13 @@ private struct BookDetailSheet: View {
                     Divider()
 
                     Picker("Status", selection: $addStatus) {
-                        Text("Planned").tag(AddStatus.planned)
-                        Text("Completed").tag(AddStatus.completed)
+                        Text("Readlist").tag(AddStatus.readlist)
+                        Text("Read").tag(AddStatus.read)
                     }
                     .pickerStyle(.segmented)
 
-                    if addStatus == .completed {
-                        DatePicker("Completed Date", selection: $readDate, displayedComponents: .date)
+                    if addStatus == .read {
+                        DatePicker("Read Date", selection: $readDate, displayedComponents: .date)
                     }
 
                     TextEditor(text: $notes)
@@ -241,7 +252,7 @@ private struct BookDetailSheet: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") { addBook() }
+                    Button(addStatus == .readlist ? "Add to Readlist" : "Add as Read") { addBook() }
                 }
             }
             .alert("Already Added", isPresented: $showDuplicateAlert) {
@@ -287,7 +298,7 @@ private struct BookDetailSheet: View {
             pageCount: book.pageCount,
             rating: book.rating,
             ratingCount: book.ratingCount,
-            watchedDate: addStatus == .completed ? readDate : nil,
+            watchedDate: addStatus == .read ? readDate : nil,
             notes: notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notes,
             isbn: book.isbn,
             infoURL: book.slug.flatMap { "https://hardcover.app/books/\($0)" },
@@ -298,6 +309,7 @@ private struct BookDetailSheet: View {
 
         modelContext.insert(newBook)
         try? modelContext.save()
+
         dismiss()
     }
 }

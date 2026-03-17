@@ -20,6 +20,8 @@ final class TVShow {
     var genres: [String]
     var seasonCount: Int?
     var episodeCount: Int?
+    var publicRating: Double?
+    var publicRatingCount: Int?
     var rating: Double?
     var watchedDate: Date?
     var dateAdded: Date
@@ -36,6 +38,8 @@ final class TVShow {
         genres: [String] = [],
         seasonCount: Int? = nil,
         episodeCount: Int? = nil,
+        publicRating: Double? = nil,
+        publicRatingCount: Int? = nil,
         rating: Double? = nil,
         watchedDate: Date? = nil,
         notes: String? = nil,
@@ -50,6 +54,8 @@ final class TVShow {
         self.genres = genres
         self.seasonCount = seasonCount
         self.episodeCount = episodeCount
+        self.publicRating = publicRating
+        self.publicRatingCount = publicRatingCount
         self.rating = rating
         self.watchedDate = watchedDate
         self.dateAdded = Date()

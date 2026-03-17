@@ -17,6 +17,8 @@ final class Movie {
     var posterURL: String?
     var overview: String?
     var genres: [String]
+    var publicRating: Double?
+    var publicRatingCount: Int?
     var rating: Double?
     var watchedDate: Date?
     var dateAdded: Date
@@ -31,6 +33,8 @@ final class Movie {
         posterURL: String? = nil,
         overview: String? = nil,
         genres: [String] = [],
+        publicRating: Double? = nil,
+        publicRatingCount: Int? = nil,
         rating: Double? = nil,
         watchedDate: Date? = nil,
         notes: String? = nil,
@@ -43,6 +47,8 @@ final class Movie {
         self.posterURL = posterURL
         self.overview = overview
         self.genres = genres
+        self.publicRating = publicRating
+        self.publicRatingCount = publicRatingCount
         self.rating = rating
         self.watchedDate = watchedDate
         self.dateAdded = Date()

@@ -330,7 +330,8 @@ struct PodcastShowAddSheet: View {
             episodeGUID: episode.guid,
             podcastIndexEpisodeID: episode.id,
             podcastIndexFeedID: episode.feedID ?? show.id,
-            genres: []
+            genres: [],
+            transcriptURL: episode.transcriptURL
         )
     }
 

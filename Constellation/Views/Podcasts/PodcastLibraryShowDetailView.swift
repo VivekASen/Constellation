@@ -3,6 +3,7 @@ import SwiftData
 
 struct PodcastLibraryShowDetailView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.colorScheme) private var colorScheme
     @Query private var existingEpisodes: [PodcastEpisode]
     @State private var showingAddEpisodes = false
 
@@ -43,7 +44,7 @@ struct PodcastLibraryShowDetailView: View {
                             .buttonStyle(.plain)
                             .padding(12)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.white.opacity(0.86))
+                            .background(cardBackground)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                             .contextMenu {
                                 Button {
@@ -93,6 +94,10 @@ struct PodcastLibraryShowDetailView: View {
         .sheet(isPresented: $showingAddEpisodes) {
             PodcastShowAddSheet(show: scopedShow)
         }
+    }
+
+    private var cardBackground: Color {
+        colorScheme == .dark ? Color.white.opacity(0.12) : Color.white.opacity(0.86)
     }
 
     private func sortEpisodesNewestFirst(_ lhs: PodcastEpisode, _ rhs: PodcastEpisode) -> Bool {

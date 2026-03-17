@@ -23,6 +23,8 @@ final class PodcastEpisode {
     var currentPositionSeconds: Double
     var completedAt: Date?
     var aiSummary: String?
+    var summarySource: String?
+    var summaryUpdatedAt: Date?
     var transcriptURL: String?
     var transcriptText: String?
     var notes: String?
@@ -47,6 +49,8 @@ final class PodcastEpisode {
         currentPositionSeconds: Double = 0,
         completedAt: Date? = nil,
         aiSummary: String? = nil,
+        summarySource: String? = nil,
+        summaryUpdatedAt: Date? = nil,
         transcriptURL: String? = nil,
         transcriptText: String? = nil,
         notes: String? = nil
@@ -71,6 +75,8 @@ final class PodcastEpisode {
         self.currentPositionSeconds = currentPositionSeconds
         self.completedAt = completedAt
         self.aiSummary = aiSummary
+        self.summarySource = summarySource
+        self.summaryUpdatedAt = summaryUpdatedAt
         self.transcriptURL = transcriptURL
         self.transcriptText = transcriptText
         self.notes = notes

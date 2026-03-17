@@ -69,7 +69,7 @@ struct ConstellationGraphEdgeAggregate {
     var source: ConstellationGraphEdgeSource
 }
 
-enum ConstellationGraphEdgeSource {
+enum ConstellationGraphEdgeSource: CaseIterable {
     case theme
     case genre
     case collection
@@ -86,10 +86,28 @@ enum ConstellationGraphEdgeSource {
     
     var priority: Int {
         switch self {
-        case .hybrid: return 3
-        case .collection: return 2
-        case .theme: return 1
-        case .genre: return 1
+        case .hybrid: return 4
+        case .theme: return 3
+        case .genre: return 2
+        case .collection: return 1
+        }
+    }
+
+    var legendTitle: String {
+        switch self {
+        case .theme: return "Theme Link"
+        case .genre: return "Genre Link"
+        case .collection: return "Collection Link"
+        case .hybrid: return "Hybrid Link"
+        }
+    }
+
+    var legendDetail: String {
+        switch self {
+        case .theme: return "Items share thematic patterns."
+        case .genre: return "Items share genre traits."
+        case .collection: return "Items are connected by your collections."
+        case .hybrid: return "Multiple overlap signals are present."
         }
     }
 }
@@ -304,6 +322,10 @@ func applyConstellationGraphFilter(nodes: [ConstellationGraphNode], edges: [Cons
 }
 
 struct ConstellationThemeSelection: Identifiable {
+    let id: String
+}
+
+struct ConstellationGenreSelection: Identifiable {
     let id: String
 }
 

@@ -272,6 +272,7 @@ struct TMDBMovieDetail: Codable {
     let posterPath: String?
     let releaseDate: String?
     let voteAverage: Double?
+    let voteCount: Int?
     let runtime: Int?
     let genres: [TMDBGenre]
     let credits: TMDBCredits?
@@ -281,6 +282,7 @@ struct TMDBMovieDetail: Codable {
         case posterPath = "poster_path"
         case releaseDate = "release_date"
         case voteAverage = "vote_average"
+        case voteCount = "vote_count"
     }
     
     var director: String? {
@@ -343,6 +345,7 @@ struct TMDBTVShowDetail: Codable {
     let posterPath: String?
     let firstAirDate: String?
     let voteAverage: Double?
+    let voteCount: Int?
     let genres: [TMDBGenre]
     let numberOfSeasons: Int?
     let numberOfEpisodes: Int?
@@ -353,6 +356,7 @@ struct TMDBTVShowDetail: Codable {
         case posterPath = "poster_path"
         case firstAirDate = "first_air_date"
         case voteAverage = "vote_average"
+        case voteCount = "vote_count"
         case numberOfSeasons = "number_of_seasons"
         case numberOfEpisodes = "number_of_episodes"
         case createdBy = "created_by"
