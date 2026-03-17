@@ -1,0 +1,10 @@
+# macOS / Xcode local state
+.DS_Store
+xcuserdata/
+*.xcuserstate
+
+# Local secrets (never commit)
+LocalSecrets.xcconfig
+*.local.xcconfig
+.env
+.env.local

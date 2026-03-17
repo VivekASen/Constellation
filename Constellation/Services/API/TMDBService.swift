@@ -186,24 +186,20 @@ class TMDBService {
 }
 
 private enum APIKeyStore {
-    private static var apiKeys: [String: String] {
-        Bundle.main.object(forInfoDictionaryKey: "APIKeys") as? [String: String] ?? [:]
-    }
-
     static var tmdb: String {
-        apiKeys["TMDB"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        AppSecrets.value(.tmdb)
     }
 
     static var tasteDive: String {
-        apiKeys["TasteDive"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        AppSecrets.value(.tasteDive)
     }
 
     static var podcast: String {
-        apiKeys["Podcast"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        AppSecrets.value(.podcast)
     }
 
     static var books: String {
-        apiKeys["Books"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        AppSecrets.value(.books)
     }
 }
 

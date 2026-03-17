@@ -542,15 +542,12 @@ final class HardcoverBooksService {
     }
 
     private var apiToken: String? {
-        let envToken = ProcessInfo.processInfo.environment["HARDCOVER_TOKEN"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if let envToken, !envToken.isEmpty { return envToken }
+        let explicit = AppSecrets.value(.hardcover)
+        if !explicit.isEmpty { return explicit }
 
-        let keys = Bundle.main.object(forInfoDictionaryKey: "APIKeys") as? [String: String]
-        let explicit = keys?["Hardcover"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let explicit, !explicit.isEmpty { return explicit }
-        let legacy = keys?["Books"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let legacy, !legacy.isEmpty { return legacy }
+        let legacy = AppSecrets.value(.books)
+        if !legacy.isEmpty { return legacy }
+
         return nil
     }
 }

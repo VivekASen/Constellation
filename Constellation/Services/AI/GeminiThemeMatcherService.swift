@@ -115,8 +115,7 @@ Candidate Themes:\n\(candidateBlock)
     }
 
     private var apiKey: String {
-        let apiKeys = Bundle.main.object(forInfoDictionaryKey: "APIKeys") as? [String: String]
-        return apiKeys?["Gemini"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        AppSecrets.value(.gemini)
     }
 
     private func parseThemes(from rawContent: String) -> [String] {

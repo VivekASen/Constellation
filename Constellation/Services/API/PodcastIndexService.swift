@@ -282,13 +282,8 @@ final class PodcastIndexService {
     }
 
     private var credentials: Credentials? {
-        let keys = Bundle.main.object(forInfoDictionaryKey: "APIKeys") as? [String: String]
-        let key = keys?["PodcastIndexKey"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-            ?? keys?["Podcast"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-            ?? ""
-        let secret = keys?["PodcastIndexSecret"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-            ?? keys?["PodcastSecret"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-            ?? ""
+        let key = AppSecrets.value(.podcastIndexKey)
+        let secret = AppSecrets.value(.podcastIndexSecret)
 
         guard !key.isEmpty, !secret.isEmpty else { return nil }
         return Credentials(key: key, secret: secret)

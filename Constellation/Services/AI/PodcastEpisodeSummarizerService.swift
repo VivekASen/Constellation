@@ -334,8 +334,7 @@ Timestamp Notes:
     }
 
     private var apiKey: String {
-        let apiKeys = Bundle.main.object(forInfoDictionaryKey: "APIKeys") as? [String: String]
-        return apiKeys?["Gemini"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        AppSecrets.value(.gemini)
     }
 }
 
